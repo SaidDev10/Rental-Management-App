@@ -13,7 +13,7 @@ const accessClaimsSchema = z.object({
   sub: z.string().min(1),
   account_id: z.string().min(1),
   role: z.enum(['owner', 'super_admin']),
-  email: z.string().email(),
+  email: z.email(),
   sid: z.string().min(1),
   imp: z.boolean().optional(),
   iat: z.number().int(),

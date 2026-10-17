@@ -15,16 +15,16 @@ const authorizerSchema = z.object({
 
 const pdfSchema = commonSchema.extend({
   DOCUMENTS_BUCKET: z.string().min(1),
-  NOTIFICATION_QUEUE_URL: z.string().url(),
+  NOTIFICATION_QUEUE_URL: z.url(),
 });
 
 const reportSchema = commonSchema.extend({
   DOCUMENTS_BUCKET: z.string().min(1),
-  NOTIFICATION_QUEUE_URL: z.string().url(),
+  NOTIFICATION_QUEUE_URL: z.url(),
 });
 
 const notificationSchema = commonSchema.extend({
-  SES_FROM_ADDRESS: z.string().email(),
+  SES_FROM_ADDRESS: z.email(),
   SES_CONFIG_SET: z.string().min(1),
   SSM_PARAM_PREFIX: z.string().startsWith('/'),
   TWILIO_MONTHLY_CAP: z.coerce.number().int().positive().default(500),

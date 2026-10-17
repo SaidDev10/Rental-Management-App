@@ -29,6 +29,20 @@ describe('backend skeleton', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ token: expect.any(String) });
+    expect(await response.json()).toMatchObject({ token: expect.any(String), accessToken: expect.any(String) });
+  });
+
+  it('rejects invalid credentials', async () => {
+    const response = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'owner@example.com',
+        password: 'wrong-password',
+      }),
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
   });
 });

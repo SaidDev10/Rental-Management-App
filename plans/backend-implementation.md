@@ -13,8 +13,9 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 - [x] Create the pnpm project scaffold, TypeScript configuration, ESLint configuration, and unit-test runner.
 - [x] Add the Hono app, `/health` route, API Lambda adapter, shared logger, and shared error types.
 - [x] Add initial DynamoDB client, key builders, and account-scoped repository primitives.
+- [x] Add a Docker Compose development stack for DynamoDB Local and LocalStack, example local AWS endpoint settings, and infra up/down scripts.
 - [ ] Complete and validate application configuration according to the specification for all functions.
-- [ ] Provide the local DynamoDB/LocalStack development stack and verify `pnpm dev` against it.
+- [x] Start DynamoDB Local and LocalStack and verify `pnpm dev` with the local AWS endpoint configuration.
 - [ ] Add CI that installs dependencies and runs the required verification steps.
 - [ ] Meet the phase exit criteria: `pnpm dev` serves `/health`; lint passes; CI passes.
 
@@ -35,10 +36,12 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 **Specification deliverable:** registration, login, MFA, refresh/logout, JWT, session model, and lockout.
 
-**Status: Not started — authorizer groundwork exists, but auth flows are stubs**
+**Status: In progress — route and crypto scaffolding exists, but registration/login use in-memory demo data and do not meet the specification**
 
 - [x] Add an API Gateway JWT authorizer entry point that validates RS256 claims and reads the public key from SSM.
-- [ ] Implement registration and credential verification with the specified password hashing.
+- [x] Add Argon2 password hash/verification helpers and RS256 access-token signing/verification scaffolding.
+- [ ] Implement production registration and credential verification using DynamoDB transactions, configured SSM signing keys, and the specified account/user/email-directory model.
+- [ ] Replace the in-memory demo user/store and runtime-generated signing key; do not treat the current auth scaffold as production authentication.
 - [ ] Implement MFA challenge and verification.
 - [ ] Implement access/refresh token issuance, rotation, logout, session revocation, and reuse detection.
 - [ ] Implement login lockout, session model, and super-admin single-session enforcement.
@@ -136,13 +139,13 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 ## Current verification snapshot
 
-At the last implementation validation, `corepack pnpm typecheck`, `corepack pnpm lint`, `corepack pnpm test` (39 unit tests), and `corepack pnpm build` passed. All six Lambda ZIP artifacts passed their configured uncompressed-size budgets, and offline handler import checks passed for API, PDF, report, and stream aggregation.
+Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed (40 tests across 8 files); `docker compose config` passed; DynamoDB Local returned a successful signed AWS SDK `ListTables` response; LocalStack 4.3.0 reported healthy and returned a successful AWS SDK SQS `ListQueues` response; and `pnpm dev`, configured with the local service endpoints, served `/health` successfully. The most recent full build previously passed: all six Lambda ZIP artifacts met their configured uncompressed-size budgets, and offline handler import checks passed for API, PDF, report, and stream aggregation.
 
-These checks do **not** demonstrate that the service is production-ready: there is no completed auth/domain API, Terraform deployment, AWS-compatible integration run, ZAP scan, load test, or production smoke test yet. Re-run the commands after further code changes; update this snapshot only with fresh results.
+These checks do **not** demonstrate that the service is production-ready: the current registration/login implementation is an in-memory demo scaffold, and there is no completed auth/domain API, Terraform deployment, AWS-compatible integration run, ZAP scan, load test, or production smoke test yet. Re-run the commands after further code changes; update this snapshot only with fresh results.
 
 ## Next recommended work
 
-1. Finish P0 by adding the local development services and CI pipeline, then verify the actual `pnpm dev` workflow.
+1. Finish P0 by validating configuration for every function and adding CI, then meet the P0 exit criteria.
 2. Finish P1 repositories and DynamoDB Local integration tests.
 3. Implement P2 authentication before relying on any account context or building authenticated P3 endpoints.
 4. Continue P3 core CRUD, then wire the already-built async workers into authenticated domain endpoints and proceed through the remaining phase exit criteria.
