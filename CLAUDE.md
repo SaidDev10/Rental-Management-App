@@ -45,13 +45,14 @@ These are enforced by lint, CI, or DynamoDB key design. Breaking them causes rea
 ## Commands
 
 ```bash
-npm run dev          # local API on :3000 (dynamodb-local + localstack)
-npm run typecheck    # tsgo --noEmit
-npm run lint         # eslint . --max-warnings 0
-npm test             # unit tests
-npm run test:integration
-npm run build
-npm run seed         # populate local fixtures
+corepack pnpm install    # install dependencies using the pinned pnpm version
+corepack pnpm dev        # local API on :3000 (dynamodb-local + localstack)
+corepack pnpm typecheck  # tsgo --noEmit
+corepack pnpm lint       # eslint . --max-warnings 0
+corepack pnpm test       # unit tests
+corepack pnpm test:integration
+corepack pnpm build
+corepack pnpm seed       # populate local fixtures
 ```
 
 ## Conventions

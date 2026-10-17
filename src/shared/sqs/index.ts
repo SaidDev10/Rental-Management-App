@@ -1,0 +1,1 @@
+export { createConsumer } from './consumer';

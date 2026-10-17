@@ -37,7 +37,7 @@ Conventions used:
 | Fit `<= $20/month` | No provisioned capacity, no X-Ray, no KMS CMKs, no VPC/NAT, EMF instead of `PutMetricData`, single API Lambda. |
 | `<= 100` concurrent users | No sharding, no caching layer, no read replicas. DynamoDB on-demand only. |
 | p99 `<= 1000 ms` | Zero network calls to other Lambdas in the request path. All cross-module calls in-process. |
-| 1–3 person team | One package, one pipeline, one table, four (five, see C-1) Lambdas. No microservice scaffolding. |
+| 1–3 person team | One package, one pipeline, one table, five application Lambdas plus the API Gateway authorizer. No microservice scaffolding. |
 | 10-year retention | Soft deletes only for domain entities; TTL only for sessions, OTPs, idempotency records, and jobs. |
 | Account isolation | Every PK/SK and every GSI key is `accountId`-prefixed. Enforced at the repository layer, not by convention. |
 
@@ -52,81 +52,6 @@ Conventions used:
 7. **Named exports only**, except in `src/lambdas/**` and `*.config.*`. See [Section 19.3.2](#1932-named-exports-only).
 
 ---
-
-## 2. Corrections & Clarifications Required to Architecture v2.0
-
-These are blocking. They are security- or correctness-relevant.
-
-### C-1 — `notification-handler` Lambda is missing from the topology (BLOCKING)
-
-§3.6 lists `notification-queue` with a `notification-handler` consumer, but §2.3 declares "**Total: 4 Lambdas**" and does not include it. A queue with no consumer will silently accumulate messages and burn budget on storage.
-
-**Resolution adopted by this spec:** add a fifth Lambda, `notification-worker` (SQS-triggered, `pdf-queue`/`notification-queue`), for a total of **5 Lambdas**. Rationale: notification dispatch has a different failure profile from PDF generation (third-party HTTP calls to Twilio/SES, retries, rate limits) and must not share a DLQ with PDF rendering.
-
-**Impact:** Architecture v2.0 §2.3 and §6.2 need a v2.1 revision. Budget impact is `< $0.20/month`.
-
-### C-2 — GSI keys are not account-scoped (BLOCKING — security)
-
-§4.3 defines `GSI2-PK = STATUS#late`. A query on that key returns **late payments for every account in the table**, violating the account-isolation guarantee in §5.2. The same defect applies to `GSI1-PK = PROPERTY#<propertyId>` (mitigated only by ULID unguessability — not a security control).
-
-**Resolution adopted by this spec:**
-
-```
-GSI1PK = ACCOUNT#<accountId>#PROPERTY#<propertyId>
-GSI1PK = ACCOUNT#<accountId>#LEASE#<leaseId>
-GSI1PK = ACCOUNT#<accountId>#TENANT#<tenantId>
-GSI1PK = ACCOUNT#<accountId>#ACCOUNT#<accountId>        // for sorted tenant listing
-GSI2PK = ACCOUNT#<accountId>#STATUS#<status>
-GSI2PK = ACCOUNT#<accountId>#EMAIL#<lowercasedEmail>    // login lookup (see C-4)
-```
-
-This makes a forgotten filter return **zero rows** instead of another tenant's data. No additional cost — same number of GSI writes.
-
-### C-3 — A Lease cannot be indexed by both Property and Tenant with one GSI1PK (BLOCKING)
-
-§4.3 claims GSI1 supports both "List leases for a property" and `GSI1-PK = TENANT#<tenantId>`. A single DynamoDB item has exactly one `GSI1PK` value, so this is impossible.
-
-**Resolution adopted by this spec:** Lease items set `GSI1PK = ACCOUNT#<id>#PROPERTY#<propertyId>`. Tenant→Lease navigation uses **KEYS-ONLY link items** written in the same `TransactWriteItems` call as the lease:
-
-```
-PK = ACCOUNT#<id>
-SK = LINK#TENANT#<tenantId>#LEASE#<leaseId>
-entityType = 'TenantLeaseLink'
-```
-
-Retrieval is a `Query` (returns lease IDs) followed by `BatchGetItem` (max 100 keys per call). Two round trips, no data duplication, no third GSI.
-
-### C-4 — No entity or index supports login by email
-
-§4.2 has no `User` entity and §4.3 has no email index, yet §5.1 requires email + password auth.
-
-**Resolution adopted by this spec:**
-
-- New entity `User`: `PK = ACCOUNT#<id>`, `SK = USER#<id>`.
-- Super Admin lives in a reserved system account: `PK = ACCOUNT#system`, `SK = USER#<id>`.
-- Login lookup uses `GSI2PK = ACCOUNT#<id>#EMAIL#<email>`, `GSI2SK = USER#<userId>`, projection `KEYS_ONLY`.
-
-Because the account is unknown at login time, the login endpoint accepts `{ email, password, accountSlug? }` and resolves the account via a **second, minimal lookup path**: a `SYSTEM` partition holding `PK = SYSTEM`, `SK = EMAIL#<email>` → `{ accountId, userId }`, TTL none. This is the only cross-account read in the system and returns no domain data.
-
-### C-5 — Session model (`SK = ACTIVE`) cannot express refresh-token rotation
-
-§4.2 defines `SESSION#<userId>` / `ACTIVE` but §5.1 requires single-use, rotating refresh tokens.
-
-**Resolution adopted by this spec:** `SK = ACTIVE` holds the **current** refresh token hash. Rotation is a single conditional `UpdateItem`:
-
-```
-ConditionExpression: refreshTokenHash = :presentedHash
-```
-
-If the condition fails, the token was already used → **token-reuse detected** → the entire session is revoked and a `SecurityEvent` audit item is written. This gives single-use semantics with one write and no extra entity.
-
-### C-6 — `nodejs26.x` runtime availability
-
-§2.3 mandates `nodejs26.x`. If that runtime is not GA in `eu-west-1` at implementation time, fall back to the newest GA LTS and record an ADR. **Do not** ship on `nodejs20.x` (Architecture risk #11).
-
-### C-7 — SQS visibility timeouts are unspecified
-
-Architecture §6.2 does not state visibility timeouts. If left at the SQS default of 30 s, every `pdf-worker` invocation longer than 30 s will be redelivered, causing duplicate PDF generation. This is a **cost and correctness bug**. Terraform MUST set the values in [Section 11.1](#111-queue-contracts-terraform).
 
 ---
 
@@ -608,6 +533,7 @@ export const sk = {
   idempotency: (key: string) => `IDEMPOTENCY#${key}`,
   processed: (eventId: string) => `PROCESSED#${eventId}`,
   active: () => `ACTIVE`,
+  usedRefreshToken: (tokenHash: string) => `USED#${tokenHash}`,
   otpPurpose: (purpose: string) => purpose,
   auditEntry: (iso: string, id: string) => `${iso}#${id}`,
 };
@@ -827,6 +753,7 @@ export interface BaseItem {
 | Entity | PK | SK | TTL |
 |---|---|---|---|
 | Session | `SESSION#<userId>` | `ACTIVE` | none (explicit revoke) |
+| Consumed refresh token | `SESSION#<userId>` | `USED#<tokenHash>` | until the session family's absolute expiry |
 | OTP | `OTP#<userId>` | `<purpose>` (`LOGIN_MFA`, `PASSWORD_RESET`) | 5 min |
 | Idempotency | `ACCOUNT#<id>` | `IDEMPOTENCY#<key>` | 24 h |
 | Processed event | `ACCOUNT#<id>` | `PROCESSED#<eventId>` | 24 h |
@@ -837,13 +764,15 @@ Session item:
 {
   PK: `SESSION#${userId}`, SK: 'ACTIVE', entityType: 'Session',
   sessionId, userId, accountId,
-  refreshTokenHash,        // SHA-256 of the opaque refresh token
-  familyId,                // rotated with the token
-  issuedAt, expiresAt,
+  refreshTokenHash,        // SHA-256 of the current opaque refresh token
+  familyId,                // stable for the session's lifetime
+  issuedAt, expiresAt,     // expiresAt is the family's absolute expiry
   device: { userAgent, ip },
   revokedAt: null,
 }
 ```
+
+Each successful rotation also writes a `ConsumedRefreshToken` item with `PK = SESSION#<userId>`, `SK = USED#<presentedTokenHash>`, `familyId`, and `ttl` set to the session family's absolute expiry. The marker contains no raw token. It remains available long enough to recognize replay of any token from that family.
 
 ### 7.4 Access pattern → implementation map
 
@@ -862,8 +791,8 @@ Session item:
 | 11 | Open tickets | `Query(GSI2, GSI2PK=ACCOUNT#<id>#STATUS#open)` → `BatchGetItem` |
 | 12 | Monthly summary | `GetItem(PK=ACCOUNT#<id>, SK=SUMMARY#<yyyy-mm>)` |
 | 13 | Quittance number | `UpdateItem ADD nextNumber :one` |
-| 14 | Login by email | `Query(GSI2, GSI2PK=ACCOUNT#<id>#EMAIL#<email>)` |
-| 15 | Global email → account | `GetItem(PK=SYSTEM, SK=EMAIL#<email>)` |
+| 14 | Login by email | `GetItem(PK=SYSTEM, SK=EMAIL#<normalizedEmail>)`, then `GetItem(PK=ACCOUNT#<id>, SK=USER#<userId>)` |
+| 15 | Claim email at registration | Transactional conditional `PutItem(PK=SYSTEM, SK=EMAIL#<normalizedEmail>)` with `attribute_not_exists(PK)` |
 | 16 | Leases for tenant | `Query(PK=ACCOUNT#<id>, begins_with(SK,'LINK#TENANT#<tid>#LEASE#'))` → `BatchGetItem` |
 | 17 | Jobs by status | `Query(GSI2, GSI2PK=ACCOUNT#<id>#STATUS#<jobStatus>)` → `BatchGetItem` |
 
@@ -963,7 +892,8 @@ On `ConditionalCheckFailedException` the repository throws `ConflictError` with 
 |---|---|
 | Create lease + tenant links | `LEASE#<id>`, N × `LINK#TENANT#…#LEASE#<id>` |
 | Record payment + summary delta (fallback path only) | `PAYMENT#<id>`, `SUMMARY#<yyyy-mm>` |
-| Rotate refresh token | `SESSION#<userId>/ACTIVE` (single conditional update — no transaction needed) |
+| Rotate refresh token | Conditional update of `SESSION#<userId>/ACTIVE` plus conditional put of `USED#<presentedTokenHash>` |
+| Revoke session after confirmed refresh-token replay | Update `SESSION#<userId>/ACTIVE` plus `AUDIT#<accountId>` security event, conditioned on the consumed-token marker existing |
 | Finalize PDF job | `JOB#<id>` update + `DOC#<id>` put |
 | Aggregate event (dedupe + summary) | `PROCESSED#<eventId>`, `SUMMARY#<yyyy-mm>` |
 
@@ -1001,6 +931,8 @@ export type { Property, CreatePropertyInput } from './types';
 | GET | `/auth/google/authorize` | public | — | `302` to Google | — |
 | GET | `/auth/google/callback` | public | — | `302` to SPA with `#access_token` | `401 OAUTH_FAILED` |
 
+Registration normalizes the email and transactionally creates the account, user, and `SYSTEM/EMAIL#<normalizedEmail>` directory item. The directory put is conditional on the key not already existing; a collision returns `409 EMAIL_TAKEN`. Email is globally unique across owners and Super Admin users.
+
 **JWT contract**
 
 ```ts
@@ -1024,9 +956,10 @@ Signed with **RS256** using the SSM private key. Public key cached in module sco
 **Refresh token contract**
 
 - Opaque 32-byte random, base64url-encoded. **Not** a JWT.
-- Stored as `refreshTokenHash = sha256(token)` in the `SESSION#<userId>/ACTIVE` item.
+- The current token is stored as `refreshTokenHash = sha256(token)` in the `SESSION#<userId>/ACTIVE` item. Only hashes are persisted.
 - Cookie: `__Host-rt`, `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/auth`, `Max-Age=2592000`.
-- Rotation: every `/auth/refresh` replaces hash + `familyId` in one conditional update. Reuse ⇒ revoke session, write `SecurityEvent` audit, return `401 SESSION_REVOKED`.
+- Rotation: every `/auth/refresh` conditionally replaces the current hash and writes a `USED#<presentedHash>` marker in the same transaction. `familyId` stays stable; `expiresAt` is the family's absolute expiry.
+- On a failed conditional transaction, check for the presented hash's consumed marker. If present, transactionally revoke the session and write a `SecurityEvent` audit item, then return `401 SESSION_REVOKED`. If absent, return `401 INVALID_REFRESH` without revoking the session. Raw refresh tokens are never stored or logged.
 
 **Lockout**
 
@@ -1464,6 +1397,8 @@ await jobRepo.markProcessing(jobId, { expectedStatus: 'queued' });   // conditio
 
 `markProcessing` uses `ConditionExpression: #status = :queued` so duplicate deliveries cannot double-render. On success, `markSucceeded` uses `ConditionExpression: #status = :processing`.
 
+The shared worker job repository also permits reclaiming a `processing` job only when its `startedAt` is older than the worker-specific stale threshold. The current thresholds are 120 s (PDF), 240 s (report), and 60 s (notification), each greater than the corresponding Lambda timeout. Claims increment `attempts` atomically and clear prior error state. Retryable failures set the job back to `queued` with a non-sensitive error summary before returning the SQS record as failed. Non-retryable failures set `failed` and are acknowledged. On the configured third receive, a retryable failure is recorded as terminal `failed` while still returning the SQS record as failed so SQS can move it to the configured DLQ.
+
 ### 10.3 Stream aggregator
 
 Dedupe via `PROCESSED#<eventId>` written transactionally with the summary update — see [Section 11.5](#115-stream-aggregator).
@@ -1480,9 +1415,9 @@ Dedupe via `PROCESSED#<eventId>` written transactionally with the summary update
 | `report-queue` | 720 s | 4 days | `report-dlq` | 3 |
 | `notification-queue` | 180 s | 4 days | `notification-dlq` | 3 |
 
-All queues: `SqsManagedSseEnabled: true`, `MessageRetentionPeriod` as above. Lambda event source mappings use `ReportBatchItemFailures`, `BatchSize: 10`, `MaximumBatchingWindowInSeconds: 5`, `FunctionResponseTypes: ['ReportBatchItemFailures']`.
+All queues: `SqsManagedSseEnabled: true`, `MessageRetentionPeriod` as above. Lambda event source mappings use `ReportBatchItemFailures`, `BatchSize: 10`, `MaximumBatchingWindowInSeconds: 5`, `FunctionResponseTypes: ['ReportBatchItemFailures']`. The visibility timeout is at least six times the consumer Lambda timeout: PDF 6 × 60 s, report 6 × 120 s, notification 6 × 30 s.
 
-**Visibility timeout MUST be `>= 6 × Lambda timeout`.** See correction C-7.
+**Visibility timeout MUST be `>= 6 × Lambda timeout`.** This reduces premature retries but does not provide exactly-once delivery; each worker's handler MUST be idempotent. See correction C-7.
 
 ### 11.2 `pdf-worker`
 
@@ -2067,7 +2002,7 @@ app.use('/internal/*', async (c, next) => {
 | Integration — routes | Vitest + `app.request()` | Every route | Status codes, error codes, auth/role enforcement |
 | Integration — workers | Vitest + localstack SQS | Every worker | Idempotency, partial batch failure, DLQ |
 | Contract — OpenAPI | `@hono/zod-openapi` + `openapi-diff` in CI | — | No breaking changes without a version bump |
-| Security | `npm audit` + OWASP ZAP baseline scan | — | NFR §7 trade-off mitigation |
+| Security | `pnpm audit` + OWASP ZAP baseline scan | — | NFR §7 trade-off mitigation |
 | Load | k6 (smoke profile) | — | p95/p99 NFR targets |
 
 ### 15.2 Mandatory test cases (must exist before merge)
@@ -2169,7 +2104,7 @@ coverage: {
     "build:notify": "node esbuild.config.ts notification-worker",
     "build:stream": "node esbuild.config.ts stream-aggregator",
     "build:authorizer": "node esbuild.config.ts authorizer",
-    "build": "npm run build:api && npm run build:pdf && npm run build:report && npm run build:notify && npm run build:stream && npm run build:authorizer && tsx scripts/verify-bundle-size.ts",
+    "build": "pnpm build:api && pnpm build:pdf && pnpm build:report && pnpm build:notify && pnpm build:stream && pnpm build:authorizer && tsx scripts/verify-bundle-size.ts",
     "seed": "tsx scripts/seed-local.ts",
     "test:load": "k6 run test/load/smoke.js"
   }
@@ -2216,11 +2151,11 @@ Idempotent: running it twice does not duplicate data (it deletes the account par
 | `api-handler.zip` | `dist/api-handler.mjs` + externals + templates | `<= 90 MB` unzipped |
 | `authorizer.zip` | `dist/authorizer.mjs` | `<= 5 MB` |
 | `pdf-worker.zip` | `dist/pdf-worker.mjs` + Chromium + fonts | `<= 220 MB` unzipped |
-| `report-worker.zip` | `dist/report-worker.mjs` + externals | `<= 100 MB` |
+| `report-worker.zip` | `dist/report-worker.mjs` + Chromium + externals | `<= 100 MB` |
 | `notification-worker.zip` | `dist/notification-worker.mjs` | `<= 30 MB` |
 | `stream-aggregator.zip` | `dist/stream-aggregator.mjs` | `<= 5 MB` |
 
-`scripts/verify-bundle-size.ts` fails the build on breach. **Chromium is only in the PDF worker** — including it in `api-handler` would blow the limit and add ~1 s to every cold start.
+`scripts/verify-bundle-size.ts` fails the build on breach. Chromium is packaged only in `pdf-worker` and `report-worker`, which both render PDFs; it is excluded from `api-handler` to avoid breaching its limit and adding cold-start cost to API requests.
 
 ### 17.2 Lambda configuration (Terraform contract)
 
@@ -2232,6 +2167,8 @@ Idempotent: running it twice does not duplicate data (it deletes the account par
 | `report-worker` | `nodejs26.x` | 1024 | 120 s | 5 | 1024 MB |
 | `notification-worker` | `nodejs26.x` | 512 | 30 s | 10 | 512 MB |
 | `stream-aggregator` | `nodejs26.x` | 512 | 30 s | 5 | 512 MB |
+
+All functions use the single runtime selected under C-6: `nodejs26.x` when generally available in `eu-west-1`, otherwise the newest generally available Node.js LTS runtime supported there, recorded in an ADR. Terraform and CI MUST use the same pinned value.
 
 `pdf-worker` needs 2048 MB ephemeral storage because `@sparticuz/chromium` extracts a ~180 MB binary to `/tmp`.
 
@@ -2259,15 +2196,17 @@ jobs:
         env: { SERVICES: s3,sqs,ses,ssm }
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 12.14.0 }
       - uses: actions/setup-node@v4
-        with: { node-version: '22', cache: 'npm', cache-dependency-path: backend/package-lock.json }
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run dep:check
-      - run: npm run test
-      - run: npm run test:integration
-      - run: npm run build
+        with: { node-version: '22', cache: 'pnpm', cache-dependency-path: pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm dep:check
+      - run: pnpm test
+      - run: pnpm test:integration
+      - run: pnpm build
       - run: npx @zaproxy/action-baseline@v0.14.0   # OWASP ZAP baseline against local server
 ```
 
@@ -2313,7 +2252,7 @@ The backend team owns application code; the platform team owns the Terraform mod
 | `notification-worker` | `GetItem`, `UpdateItem` | — | `ReceiveMessage`/`DeleteMessage` (notification) | `ses:SendEmail`, `ssm:GetParameter*` |
 | `stream-aggregator` | `UpdateItem`, `PutItem`, `TransactWriteItems` | — | — | — |
 
-`api-handler` MUST NOT have `Scan`. `stream-aggregator` MUST NOT have `Query`. These are enforced by omitting the actions, and covered by an IAM policy test in CI (`npm run test:iam` parses the Terraform JSON and asserts the negative).
+`api-handler` MUST NOT have `Scan`. `stream-aggregator` MUST NOT have `Query`. These are enforced by omitting the actions, and covered by an IAM policy test in CI (`pnpm test:iam` parses the Terraform JSON and asserts the negative).
 
 ---
 
@@ -2650,7 +2589,7 @@ export async function recordPayment(
 }
 ```
 
-**CI gate:** `npm run lint` runs with `--max-warnings 0`. A warning is a failure.
+**CI gate:** `pnpm lint` runs with `--max-warnings 0`. A warning is a failure.
 
 ### 19.2 TypeScript configuration
 
@@ -2825,7 +2764,7 @@ DynamoDB has no migrations. The pattern:
 - [ ] `idempotent: true` added if the route creates an entity.
 - [ ] Metric emitted if the route represents a business event.
 - [ ] OpenAPI spec regenerated; `openapi-diff` shows no breaking change.
-- [ ] `npm run lint` passes with `--max-warnings 0`.
+- [ ] `pnpm lint` passes with `--max-warnings 0`.
 - [ ] No new dependencies without an ADR.
 - [ ] Bundle size gate passes.
 
@@ -2835,7 +2774,7 @@ DynamoDB has no migrations. The pattern:
 
 | Phase | Duration | Deliverable | Exit criteria |
 |---|---|---|---|
-| **P0 — Foundations** | 1 week | Repo scaffold, config, logger, error taxonomy, base repository, ESLint config (§19.1), tsconfig (§19.2), local dev stack, CI pipeline | `npm run dev` serves `/health`; `npm run lint` green; CI green on an empty test |
+| **P0 — Foundations** | 1 week | Repo scaffold, config, logger, error taxonomy, base repository, ESLint config (§19.1), tsconfig (§19.2), local dev stack, CI pipeline | `pnpm dev` serves `/health`; `pnpm lint` green; CI green on an empty test |
 | **P1 — Data layer** | 1 week | All item types, key builders, repositories, `dynamodb-local` integration tests | Table + 2 GSIs created by Terraform; all §7.4 access patterns proven by a test |
 | **P2 — Auth** | 1.5 weeks | Register/login/MFA/refresh/logout, JWT, session model, lockout | Token-reuse detection test passes; super-admin single session enforced |
 | **P3 — Core CRUD** | 2 weeks | Property, Tenant, Lease, Payment modules + payment schedule generation | End-to-end: register → property → tenant → lease → schedule |
@@ -2856,17 +2795,18 @@ DynamoDB has no migrations. The pattern:
 
 | # | Question | Blocks | Proposed default |
 |---|---|---|---|
-| Q1 | Approve `notification-worker` as the 5th Lambda (C-1)? | §11.4 | Yes |
+| Q1 | Approve `notification-worker` on its own queue/DLQ and the corrected deployed count (C-1)? | §11.4 | Yes — 6 functions total including authorizer |
 | Q2 | Approve account-scoped GSI key prefixes (C-2)? | §7.2 | Yes — security |
 | Q3 | Approve tenant-lease link items instead of a third GSI (C-3)? | §7.2 | Yes — cheaper |
-| Q4 | Approve the `SYSTEM` partition for the email→account login lookup (C-4)? | §8.1 | Yes — only cross-account read |
-| Q5 | Approve SQS visibility timeout values (C-7)? | §11.1 | Yes — pdf 360 s, report 720 s |
+| Q4 | Approve globally unique normalized email and the `SYSTEM` email directory (C-4)? | §8.1 | Yes — identifiers only, conditionally claimed at registration |
+| Q5 | Approve SQS visibility timeout values (C-7)? | §11.1 | Yes — PDF 360 s, report 720 s, notification 180 s |
 | Q6 | Is `nodejs26.x` GA in `eu-west-1`? (C-6) | §17.2 | Fall back to newest GA LTS |
 | Q7 | Twilio monthly cap value — 500 messages? | §11.4 | 500 |
 | Q8 | Is Arabic UI required at launch, or post-launch? | §11.2 | Post-launch (BRD rule #14 lists FR + EN only) |
 | Q9 | Data residency: is Ireland acceptable for Moroccan personal data, or is a Moroccan region required? | §18 | Ireland per Architecture §6.1 |
 | Q10 | Who owns the `/internal/*` HMAC key, and how is it rotated? | §14.6 | Platform team, annual |
 | Q11 | Is a `dev` environment permitted to send real Twilio/SES messages? | §16 | No — localstack only in dev |
+| Q12 | Approve consumed-token markers and revoke only on confirmed refresh-token replay (C-5)? | §7.3.11, §8.1 | Yes — invalid unknown tokens do not revoke sessions |
 
 ---
 
@@ -2890,7 +2830,9 @@ ACCOUNT#<aid>               COUNTER#whatsapp#<yyyy-mm>          Counter
 ACCOUNT#<aid>               LINK#TENANT#<tid>#LEASE#<lid>       TenantLeaseLink
 ACCOUNT#<aid>               IDEMPOTENCY#<key>                   IdempotencyRecord
 ACCOUNT#<aid>               PROCESSED#<eventId>                 ProcessedEvent
+SESSION#<uid>               USED#<tokenHash>                    ConsumedRefreshToken
 AUDIT#<aid>                 <iso>#<ulid>                        AuditLog
+- Refresh token rotation: use token → rotate → replay a consumed token → `SESSION_REVOKED`; an unrecognized invalid token returns `INVALID_REFRESH` without revoking the session.
 SESSION#<uid>               ACTIVE                              Session
 OTP#<uid>                   LOGIN_MFA | PASSWORD_RESET          Otp
 SYSTEM                      EMAIL#<email>                       EmailIndex
@@ -2955,7 +2897,7 @@ Every event payload MUST carry `{ eventId, occurredAt, accountId, entityType, en
 | 10-year retention | Soft deletes; S3 lifecycle to Glacier at 2y | S3 `GetBucketLifecycle` test |
 | Account isolation | Account-scoped keys + account-scoped GSIs (C-2) | parameterized isolation test suite |
 | `$20/month` | EMF metrics, no X-Ray, no KMS CMK, no NAT, on-demand only, Twilio cap | AWS Budgets + monthly review |
-| Developer onboarding | Uniform ESLint config (§19.1), extensionless imports (§4.4, §19.3), named exports (§19.3.2) | `npm run lint` in CI; PR review |
+| Developer onboarding | Uniform ESLint config (§19.1), extensionless imports (§4.4, §19.3), named exports (§19.3.2) | `pnpm lint` in CI; PR review |
 
 ---
 

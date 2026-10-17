@@ -13,7 +13,7 @@
 
 This document describes the technical architecture for the Rental Management App — a web-based application for individual property owners in Morocco to manage long-term rental properties.
 
-The architecture follows a **Serverless Modular Monolith** pattern: a single Hono application running in a single AWS Lambda function, backed by a DynamoDB single-table design, with async workers for PDF generation and reporting. All infrastructure is defined in Terraform and deployed to AWS `eu-west-1` (Ireland).
+This architecture follows a **Serverless Modular Monolith** pattern: a single Hono application running in a single AWS Lambda function, backed by a DynamoDB single-table design, with async workers for PDF generation, reporting, and notifications. All infrastructure is defined in Terraform and deployed to AWS `eu-west-1` (Ireland).
 
 This architecture was selected because it:
 
@@ -127,14 +127,16 @@ This architecture was selected because it:
 | **`api-handler`** | API Gateway (`ANY /{proxy+}`) | **All synchronous routes** (Hono app) | `nodejs26.x` | 1024 MB | 29s |
 | `pdf-worker` | SQS `pdf-queue` | PDF generation (lease, quittance, etc.) | `nodejs26.x` | 1024 MB | 60s |
 | `report-worker` | SQS `report-queue` | Excel/PDF report export | `nodejs26.x` | 1024 MB | 120s |
+| `notification-worker` | SQS `notification-queue` | Email/WhatsApp dispatch and retry handling | `nodejs26.x` | 512 MB | 30s |
 | `stream-aggregator` | DynamoDB Streams | Update summary items | `nodejs26.x` | 512 MB | 30s |
 
-**Total: 4 Lambdas.**
+**Total: 5 Lambdas.**
 
 **Design rationale:**
 
 - **Single API Lambda** — one cold start warms the entire API. Users navigating between properties, leases, and payments never hit a cold start after the first request. This directly improves p95/p99 NFR targets.
-- **Async workers separate** — PDF generation (60s timeout, 1024 MB) and report export (120s timeout) must not block API requests. SQS decoupling means API routes return `202 Accepted` immediately.
+- **Async workers separate** — PDF generation (60s timeout, 1024 MB), report export (120s timeout), and notification dispatch (30s timeout, 512 MB) must not block API requests. SQS decoupling means API routes return `202 Accepted` immediately.
+- **Notification dispatch has separate failure modes** — SES/Twilio HTTP calls are rate-limited and retry-sensitive, so they must not share a DLQ with PDF rendering.
 - **Stream aggregator separate** — triggered by DynamoDB Streams, not HTTP. Different event shape, different IAM role.
 
 ### 2.4 Architectural Principles
@@ -284,7 +286,7 @@ See section 4 for the full schema.
 |-------|---------|----------|---------|
 | `pdf-queue` | API Lambda (lease/payment handlers) | `pdf-worker` | Generate lease, quittance, fiche de police, etat des lieux |
 | `report-queue` | API Lambda (reporting handler) | `report-worker` | Generate Excel/PDF exports |
-| `notification-queue` | DynamoDB Streams / EventBridge | `notification-handler` | Send email/WhatsApp reminders |
+| `notification-queue` | DynamoDB Streams / EventBridge | `notification-worker` | Send email/WhatsApp reminders and alerts |
 
 **Retry policy:** 3 attempts, then DLQ. DLQs monitored via CloudWatch alarms.
 
@@ -333,6 +335,7 @@ All items for an account are prefixed with `ACCOUNT#<accountId>` in the PK, guar
 | Entity | PK | SK |
 |--------|----|----|
 | Account | `ACCOUNT#<id>` | `META` |
+| User | `ACCOUNT#<id>` | `USER#<id>` |
 | Property | `ACCOUNT#<id>` | `PROPERTY#<id>` |
 | Tenant | `ACCOUNT#<id>` | `TENANT#<id>` |
 | Lease | `ACCOUNT#<id>` | `LEASE#<id>` |
@@ -344,37 +347,39 @@ All items for an account are prefixed with `ACCOUNT#<accountId>` in the PK, guar
 | Session | `SESSION#<userId>` | `ACTIVE` |
 | OTP | `OTP#<userId>` | `<purpose>` |
 | Audit Log | `AUDIT#<accountId>` | `<timestamp>#<id>` |
+| Email lookup | `SYSTEM` | `EMAIL#<normalizedEmail>` |
 
 ### 4.3 Global Secondary Indexes
 
-**GSI1 — Property/Lease lookups**
+**GSI1 — Account-scoped property / lease / tenant lookups**
 
 | Attribute | Value |
 |-----------|-------|
-| GSI1-PK | `PROPERTY#<propertyId>` or `LEASE#<leaseId>` or `TENANT#<tenantId>` |
-| GSI1-SK | Entity-specific sort (e.g., `LEASE#<startDate>`, `PAYMENT#<dueDate>`) |
+| GSI1-PK | `ACCOUNT#<accountId>#PROPERTY#<propertyId>` or `ACCOUNT#<accountId>#LEASE#<leaseId>` or `ACCOUNT#<accountId>#TENANT#<tenantId>` or `ACCOUNT#<accountId>#ACCOUNT#<accountId>` |
+| GSI1-SK | Entity-specific sort (e.g., `LEASE#<startDate>`, `PAYMENT#<dueDate>`, `TENANT#<sortName>#<id>`) |
 | Projection | `ALL` |
 
 Supports:
 
-- List leases for a property
-- List payments for a lease
-- List documents for a lease
-- List tenants (by name)
+- List leases for a property within one account
+- List payments for a lease within one account
+- List documents for a lease within one account
+- List tenants (by name) within one account
 
-**GSI2 — Status lookups**
+**GSI2 — Account-scoped status and email lookup**
 
 | Attribute | Value |
 |-----------|-------|
-| GSI2-PK | `STATUS#<status>` (e.g., `STATUS#late`, `STATUS#paid`) |
-| GSI2-SK | `<dueDate>#<id>` |
+| GSI2-PK | `ACCOUNT#<accountId>#STATUS#<status>` or `ACCOUNT#<accountId>#EMAIL#<lowercasedEmail>` |
+| GSI2-SK | `<dueDate>#<id>` for statuses, or `USER#<userId>` for user login lookup |
 | Projection | `KEYS_ONLY` (fetch full item from base table) |
 
 Supports:
 
 - List all late payments for an account
 - List all due payments for an account
-- List open maintenance tickets
+- List open maintenance tickets for an account
+- Login by email to a specific account/user within the same tenant partition
 
 ### 4.4 Access Patterns
 
@@ -385,12 +390,12 @@ Supports:
 | 3 | List all tenants | Base | PK=`ACCOUNT#<id>`, SK begins_with `TENANT#` |
 | 4 | List all leases | Base | PK=`ACCOUNT#<id>`, SK begins_with `LEASE#` |
 | 5 | List all payments | Base | PK=`ACCOUNT#<id>`, SK begins_with `PAYMENT#` |
-| 6 | List leases for a property | GSI1 | GSI1-PK=`PROPERTY#<propId>` |
-| 7 | List payments for a lease | GSI1 | GSI1-PK=`LEASE#<leaseId>` |
-| 8 | List documents for a lease | GSI1 | GSI1-PK=`LEASE#<leaseId>`, SK begins_with `DOC#` |
-| 9 | List late payments | GSI2 | GSI2-PK=`STATUS#late` |
-| 10 | List due payments | GSI2 | GSI2-PK=`STATUS#due` |
-| 11 | List open tickets | GSI2 | GSI2-PK=`STATUS#open` |
+| 6 | List leases for a property | GSI1 | GSI1-PK=`ACCOUNT#<accountId>#PROPERTY#<propId>` |
+| 7 | List payments for a lease | GSI1 | GSI1-PK=`ACCOUNT#<accountId>#LEASE#<leaseId>` |
+| 8 | List documents for a lease | GSI1 | GSI1-PK=`ACCOUNT#<accountId>#LEASE#<leaseId>`, SK begins_with `DOC#` |
+| 9 | List late payments | GSI2 | GSI2-PK=`ACCOUNT#<accountId>#STATUS#late` |
+| 10 | List due payments | GSI2 | GSI2-PK=`ACCOUNT#<accountId>#STATUS#due` |
+| 11 | List open tickets | GSI2 | GSI2-PK=`ACCOUNT#<accountId>#STATUS#open` |
 | 12 | Get monthly summary | Base | PK=`ACCOUNT#<id>`, SK=`SUMMARY#<yyyy-mm>` |
 | 13 | Atomic quittance number | Base | `UpdateItem` with `ADD` on `COUNTER#quittance` |
 
@@ -473,7 +478,7 @@ This is atomic and race-free — two concurrent payment recordings will get diff
 - **Algorithm:** RS256 (asymmetric — public key shared with frontend for verification).
 - **Claims:** `sub` (userId), `account_id`, `role` (`owner` or `super_admin`), `exp`, `iat`, `jti`.
 - **Storage:** Access token in memory (frontend); refresh token in httpOnly, Secure, SameSite=Strict cookie.
-- **Rotation:** Refresh token rotated on every use; old token invalidated (single-use enforcement via DynamoDB session table).
+- **Rotation:** Refresh token rotated on every use. The `SESSION#<userId>/ACTIVE` item stores the current refresh-token hash; a replayed or reused token is rejected and the session is revoked, with a `SecurityEvent` audit item written in the same flow.
 
 ### 5.2 Authorization
 
@@ -567,17 +572,18 @@ This is atomic and race-free — two concurrent payment recordings will get diff
 |  +----------------------------+------------------------------------+  |
 |                               |                                       |
 |  +----------------------------v------------------------------------+  |
-|  |  Lambda Functions (4 total)                                     |  |
+|  |  Lambda Functions (5 total)                                     |  |
 |  |  - api-handler (Hono, all sync routes)                          |  |
 |  |  - pdf-worker (SQS-triggered)                                   |  |
 |  |  - report-worker (SQS-triggered)                                |  |
+|  |  - notification-worker (SQS-triggered)                          |  |
 |  |  - stream-aggregator (DynamoDB Streams-triggered)               |  |
 |  +----------------------------+------------------------------------+  |
 |                               |                                       |
 |  +----------------------------v------------------------------------+  |
 |  |  DynamoDB (single table + 2 GSIs + PITR + Streams)              |  |
 |  |  S3 (documents, photos, frontend, tfstate)                      |  |
-|  |  SQS (pdf-queue, report-queue + DLQs)                           |  |
+|  |  SQS (pdf-queue, report-queue, notification-queue + DLQs)     |  |
 |  |  SES (email)                                                    |  |
 |  |  SSM Parameter Store (secrets)                                  |  |
 |  |  CloudWatch (logs, metrics, alarms)                             |  |
@@ -598,7 +604,7 @@ This is atomic and race-free — two concurrent payment recordings will get diff
 infrastructure/
 |-- modules/
 |   |-- api-gateway/       # HTTP API, catch-all route, authorizer, throttling
-|   |-- lambda/            # 4 Lambda functions, IAM roles, env vars
+|   |-- lambda/            # 5 Lambda functions, IAM roles, env vars
 |   |-- dynamodb/          # Table, GSIs, streams, PITR, backups
 |   |-- s3/                # Buckets, lifecycle, policies, encryption
 |   |-- cloudfront/        # Distribution, origins, ACM cert
@@ -757,7 +763,7 @@ modules/property/
 4. payment-service -> writes Payment item to DynamoDB
 5. payment-service -> emits PaymentRecorded event (via DynamoDB Streams)
 6. stream-aggregator -> updates SUMMARY#<yyyy-mm> item
-7. notification-handler -> sends quittance email/WhatsApp
+7. notification-worker -> sends quittance email/WhatsApp
 8. payment-service -> enqueues PDF job to pdf-queue (returns 202 to client)
 9. pdf-worker -> generates quittance PDF, uploads to S3
 ```
