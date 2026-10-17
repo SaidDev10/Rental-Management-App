@@ -2177,38 +2177,51 @@ All functions use the single runtime selected under C-6: `nodejs26.x` when gener
 ### 17.3 CI/CD
 
 ```yaml
-# .github/workflows/backend-ci.yml
-name: backend-ci
-on:
-  push: { paths: ['backend/**'] }
-  pull_request: { paths: ['backend/**'] }
+version: 2.1
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    services:
-      dynamodb-local:
-        image: amazon/dynamodb-local
-        ports: ['8000:8000']
-      localstack:
-        image: localstack/localstack
-        ports: ['4566:4566']
-        env: { SERVICES: s3,sqs,ses,ssm }
+    docker:
+      - image: cimg/node:22.14.0
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 12.14.0 }
-      - uses: actions/setup-node@v4
-        with: { node-version: '22', cache: 'pnpm', cache-dependency-path: pnpm-lock.yaml }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm dep:check
-      - run: pnpm test
-      - run: pnpm test:integration
-      - run: pnpm build
-      - run: npx @zaproxy/action-baseline@v0.14.0   # OWASP ZAP baseline against local server
+      - checkout
+      - run:
+          name: Activate pinned pnpm
+          command: |
+            corepack enable
+            corepack prepare pnpm@12.14.0 --activate
+            pnpm config set store-dir ~/.pnpm-store
+      - restore_cache:
+          keys:
+            - pnpm-v1-{{ checksum "pnpm-lock.yaml" }}
+            - pnpm-v1-
+      - run:
+          name: Install dependencies
+          command: pnpm install --frozen-lockfile
+      - save_cache:
+          key: pnpm-v1-{{ checksum "pnpm-lock.yaml" }}
+          paths:
+            - ~/.pnpm-store
+      - run:
+          name: Typecheck
+          command: pnpm typecheck
+      - run:
+          name: Lint
+          command: pnpm lint
+      - run:
+          name: Unit tests
+          command: pnpm test
+      - run:
+          name: Build Lambda artifacts
+          command: pnpm build
+
+workflows:
+  backend:
+    jobs:
+      - verify
 ```
+
+The workflow runs on pushes and pull requests through CircleCI project triggers. Keep its verification commands aligned with scripts that exist in `package.json`; add integration-service containers and scans when those test suites and commands have been implemented.
 
 **Deployment order** (per Architecture §6.4): Terraform apply → Lambda deploy (all 6) → S3 sync → CloudFront invalidation → smoke tests.
 

@@ -19,6 +19,7 @@ const entries = {
 type ArtifactName = keyof typeof entries;
 
 const externals: Partial<Record<ArtifactName, string[]>> = {
+  'api-handler': ['@node-rs/argon2'],
   'pdf-worker': ['@sparticuz/chromium'],
   'report-worker': ['@sparticuz/chromium'],
 };

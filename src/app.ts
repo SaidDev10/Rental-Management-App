@@ -3,8 +3,11 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 
 import { AppError } from './shared/errors';
+import { readApiConfig } from './shared/config';
 import { authRoutes } from './modules/auth';
 import { propertyRoutes, propertyService } from './modules/property';
+
+const config = readApiConfig();
 
 export const app = new Hono();
 
@@ -12,7 +15,7 @@ app.use('*', logger());
 app.use(
   '*',
   cors({
-    origin: ['http://localhost:5173'],
+    origin: config.ALLOWED_ORIGINS,
     credentials: true,
   }),
 );

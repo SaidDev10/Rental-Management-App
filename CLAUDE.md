@@ -16,6 +16,7 @@ Target scale: `<= 100` concurrent users, `<= 20 USD/month` infrastructure budget
 | Storage | S3 (documents, photos, SPA), CloudFront |
 | Async | SQS + DLQs, EventBridge Scheduler |
 | Infra | Terraform, AWS `eu-west-1` |
+| CI/CD | CircleCI |
 | UI languages | French + English |
 
 ## Implementation specifications

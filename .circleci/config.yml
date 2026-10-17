@@ -1,0 +1,42 @@
+version: 2.1
+
+jobs:
+  verify:
+    docker:
+      - image: cimg/node:22.14.0
+    steps:
+      - checkout
+      - run:
+          name: Activate pinned pnpm
+          command: |
+            corepack enable
+            corepack prepare pnpm@12.14.0 --activate
+            pnpm config set store-dir ~/.pnpm-store
+      - restore_cache:
+          keys:
+            - pnpm-v1-{{ checksum "pnpm-lock.yaml" }}
+            - pnpm-v1-
+      - run:
+          name: Install dependencies
+          command: pnpm install --frozen-lockfile
+      - save_cache:
+          key: pnpm-v1-{{ checksum "pnpm-lock.yaml" }}
+          paths:
+            - ~/.pnpm-store
+      - run:
+          name: Typecheck
+          command: pnpm typecheck
+      - run:
+          name: Lint
+          command: pnpm lint
+      - run:
+          name: Unit tests
+          command: pnpm test
+      - run:
+          name: Build Lambda artifacts
+          command: pnpm build
+
+workflows:
+  backend:
+    jobs:
+      - verify

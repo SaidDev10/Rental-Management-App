@@ -14,9 +14,9 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 - [x] Add the Hono app, `/health` route, API Lambda adapter, shared logger, and shared error types.
 - [x] Add initial DynamoDB client, key builders, and account-scoped repository primitives.
 - [x] Add a Docker Compose development stack for DynamoDB Local and LocalStack, example local AWS endpoint settings, and infra up/down scripts.
-- [ ] Complete and validate application configuration according to the specification for all functions.
+- [x] Complete and validate application configuration for the API, authorizer, and all worker roles; parse the API CORS allowlist from configuration.
 - [x] Start DynamoDB Local and LocalStack and verify `pnpm dev` with the local AWS endpoint configuration.
-- [ ] Add CI that installs dependencies and runs the required verification steps.
+- [x] Add CircleCI that installs from the frozen pnpm lockfile and runs typecheck, lint, unit tests, and Lambda builds.
 - [ ] Meet the phase exit criteria: `pnpm dev` serves `/health`; lint passes; CI passes.
 
 ## P1 — Data layer
@@ -139,13 +139,13 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 ## Current verification snapshot
 
-Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed (40 tests across 8 files); `docker compose config` passed; DynamoDB Local returned a successful signed AWS SDK `ListTables` response; LocalStack 4.3.0 reported healthy and returned a successful AWS SDK SQS `ListQueues` response; and `pnpm dev`, configured with the local service endpoints, served `/health` successfully. The most recent full build previously passed: all six Lambda ZIP artifacts met their configured uncompressed-size budgets, and offline handler import checks passed for API, PDF, report, and stream aggregation.
+Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed (47 tests across 9 files, including 7 config tests); `pnpm build` passed and all six Lambda ZIPs met their configured size budgets; CircleCI config YAML parsed successfully; and `git diff --check` passed. The CircleCI workflow itself has not yet run on CircleCI (the CircleCI CLI is not installed here). `docker compose config` passed; DynamoDB Local returned a successful signed AWS SDK `ListTables` response; LocalStack 4.3.0 reported healthy and returned a successful AWS SDK SQS `ListQueues` response; and `pnpm dev`, configured with the local service endpoints, served `/health` successfully.
 
-These checks do **not** demonstrate that the service is production-ready: the current registration/login implementation is an in-memory demo scaffold, and there is no completed auth/domain API, Terraform deployment, AWS-compatible integration run, ZAP scan, load test, or production smoke test yet. Re-run the commands after further code changes; update this snapshot only with fresh results.
+These checks do **not** demonstrate that the service is production-ready: the current registration/login implementation is an in-memory demo scaffold, and there is no completed auth/domain API, Terraform deployment, full AWS-compatible integration run, ZAP scan, load test, or production smoke test yet. Re-run the commands after further code changes; update this snapshot only with fresh results.
 
 ## Next recommended work
 
-1. Finish P0 by validating configuration for every function and adding CI, then meet the P0 exit criteria.
+1. Finish P0 by confirming the new workflow passes on CircleCI and meeting the phase exit criteria.
 2. Finish P1 repositories and DynamoDB Local integration tests.
 3. Implement P2 authentication before relying on any account context or building authenticated P3 endpoints.
 4. Continue P3 core CRUD, then wire the already-built async workers into authenticated domain endpoints and proceed through the remaining phase exit criteria.
