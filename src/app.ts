@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 
 import { AppError } from './shared/errors';
 import { readApiConfig } from './shared/config';
-import { authRoutes } from './modules/auth';
+import { authMiddleware, authRoutes } from './modules/auth';
 import { propertyRoutes } from './modules/property';
 
 const config = readApiConfig();
@@ -28,6 +28,7 @@ app.get('/health', (c) => {
   });
 });
 
+app.use('/properties/*', authMiddleware);
 app.route('/auth', authRoutes);
 app.route('/properties', propertyRoutes);
 

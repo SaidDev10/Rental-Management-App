@@ -32,6 +32,28 @@ describe('backend skeleton', () => {
     expect(await response.json()).toMatchObject({ token: expect.any(String), accessToken: expect.any(String) });
   });
 
+  it('allows authenticated property requests using the bearer token', async () => {
+    const loginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'owner@example.com',
+        password: 'supersecret123',
+      }),
+    });
+
+    const { accessToken } = (await loginResponse.json()) as { accessToken: string };
+    const response = await app.request('http://localhost/properties/', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: [{ id: 'prop_1', accountId: 'demo-account', title: 'Apartment Medina' }],
+    });
+  });
+
   it('rejects invalid credentials', async () => {
     const response = await app.request('http://localhost/auth/login', {
       method: 'POST',

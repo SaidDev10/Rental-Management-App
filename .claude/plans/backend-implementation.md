@@ -37,10 +37,12 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 **Specification deliverable:** registration, login, MFA, refresh/logout, JWT, session model, and lockout.
 
-**Status: In progress — route and crypto scaffolding exists, but registration/login use in-memory demo data and do not meet the specification**
+**Status: In progress — route, crypto, and repository scaffolding exist; the auth data access is still demo-backed and not yet production-safe**
 
 - [x] Add an API Gateway JWT authorizer entry point that validates RS256 claims and reads the public key from SSM.
 - [x] Add Argon2 password hash/verification helpers and RS256 access-token signing/verification scaffolding.
+- [x] Replace the service-level demo `Map` with a repository abstraction so auth reads/writes are centralized in a single storage boundary.
+- [x] Require verified bearer tokens on the property API and derive the account context from the JWT rather than accepting caller-supplied `x-account-id` values.
 - [ ] Implement production registration and credential verification using DynamoDB transactions, configured SSM signing keys, and the specified account/user/email-directory model.
 - [ ] Replace the in-memory demo user/store and runtime-generated signing key; do not treat the current auth scaffold as production authentication.
 - [ ] Implement MFA challenge and verification.

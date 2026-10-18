@@ -117,13 +117,8 @@ export const createScopedRepository = <T extends AccountItem>({
       new QueryCommand({
         TableName: tableName,
         ...(indexName === undefined ? {} : { IndexName: indexName }),
-        KeyConditionExpression: filterByPrefix
-          ? '#partition = :partition AND begins_with(#sort, :sortPrefix)'
-          : '#partition = :partition',
-        ExpressionAttributeNames: {
-          '#partition': partitionAttribute,
-          ...(filterByPrefix ? { '#sort': sortAttribute } : {}),
-        },
+        KeyConditionExpression: filterByPrefix ? '#partition = :partition AND begins_with(#sort, :sortPrefix)' : '#partition = :partition',
+        ExpressionAttributeNames: { '#partition': partitionAttribute, ...(filterByPrefix ? { '#sort': sortAttribute } : {}), },
         ExpressionAttributeValues: expressionValues,
         ...(options.limit === undefined ? {} : { Limit: options.limit }),
         ...(options.exclusiveStartKey === undefined ? {} : { ExclusiveStartKey: options.exclusiveStartKey }),

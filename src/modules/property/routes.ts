@@ -1,14 +1,15 @@
 import { Hono } from 'hono';
 
+import { UnauthenticatedError } from '../../shared/errors';
 import { propertyService } from './service';
 
 export const propertyRoutes = new Hono();
 
 propertyRoutes.get('', async (c) => {
-  const accountId = c.req.header('x-account-id');
+  const accountId = (c as any).get('accountId') as string | undefined;
 
-  if (!accountId) {
-    return c.json({ error: 'Missing account context' }, 401 as const);
+  if (!accountId || typeof accountId !== 'string') {
+    throw new UnauthenticatedError('Missing account context');
   }
 
   const properties = await propertyService.list(accountId);
@@ -17,10 +18,10 @@ propertyRoutes.get('', async (c) => {
 });
 
 propertyRoutes.get('/*', async (c) => {
-  const accountId = c.req.header('x-account-id');
+  const accountId = (c as any).get('accountId') as string | undefined;
 
-  if (!accountId) {
-    return c.json({ error: 'Missing account context' }, 401 as const);
+  if (!accountId || typeof accountId !== 'string') {
+    throw new UnauthenticatedError('Missing account context');
   }
 
   const properties = await propertyService.list(accountId);
