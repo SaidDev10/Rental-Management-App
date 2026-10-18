@@ -92,12 +92,14 @@ describe('auth service repository flow', () => {
 
   it('creates the account, user, and email directory as one transaction', async () => {
     setDynamoAuthEnv();
+
     const transactionCalls: Array<Record<string, unknown>> = [];
 
     const repository = createDynamoAuthRepository({
       send: async (command: unknown) => {
         if (command instanceof TransactWriteCommand) {
           transactionCalls.push(command.input as Record<string, unknown>);
+
           return {};
         }
 

@@ -1,3 +1,13 @@
+export type AuthEnv = {
+  Variables: {
+    accountId: string;
+    userId: string;
+    role: 'owner' | 'super_admin';
+    email: string;
+    sessionId: string;
+  };
+};
+
 export type LoginInput = {
   email: string;
   password: string;

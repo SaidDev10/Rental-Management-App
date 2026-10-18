@@ -5,11 +5,12 @@ import { logger } from 'hono/logger';
 import { AppError } from './shared/errors';
 import { readApiConfig } from './shared/config';
 import { authMiddleware, authRoutes } from './modules/auth';
+import type { AuthEnv } from './modules/auth/types';
 import { propertyRoutes } from './modules/property';
 
 const config = readApiConfig();
 
-export const app = new Hono();
+export const app = new Hono<AuthEnv>();
 
 app.use('*', logger());
 app.use(

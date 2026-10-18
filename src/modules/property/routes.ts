@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 
+import type { AuthEnv } from '../auth/types';
 import { UnauthenticatedError } from '../../shared/errors';
 import { propertyService } from './service';
 
-export const propertyRoutes = new Hono();
+export const propertyRoutes = new Hono<AuthEnv>();
 
 propertyRoutes.get('', async (c) => {
-  const accountId = (c as any).get('accountId') as string | undefined;
+  const accountId = c.get('accountId');
 
   if (!accountId || typeof accountId !== 'string') {
     throw new UnauthenticatedError('Missing account context');
@@ -18,7 +19,7 @@ propertyRoutes.get('', async (c) => {
 });
 
 propertyRoutes.get('/*', async (c) => {
-  const accountId = (c as any).get('accountId') as string | undefined;
+  const accountId = c.get('accountId');
 
   if (!accountId || typeof accountId !== 'string') {
     throw new UnauthenticatedError('Missing account context');

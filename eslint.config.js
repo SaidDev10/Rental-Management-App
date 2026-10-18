@@ -12,10 +12,6 @@ export default [
     files: ['**/*.ts'],
     languageOptions: {
       parser: tseslint.parser,
-      parserOptions: {
-        project: './tsconfig.json',
-        tsconfigRootDir: import.meta.dirname,
-      },
     },
     plugins: {
       import: importPlugin,

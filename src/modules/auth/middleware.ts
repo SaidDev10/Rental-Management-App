@@ -1,7 +1,10 @@
+import type { MiddlewareHandler } from 'hono';
+
 import { UnauthenticatedError } from '../../shared/errors';
 import { verifyAccessToken } from './tokens';
+import type { AuthEnv } from './types';
 
-export const authMiddleware = async (c: any, next: () => Promise<void>): Promise<void> => {
+export const authMiddleware: MiddlewareHandler<AuthEnv> = async (c, next) => {
   const authorization = c.req.header('Authorization');
 
   if (!authorization?.startsWith('Bearer ')) {
