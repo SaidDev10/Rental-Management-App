@@ -43,7 +43,8 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 - [x] Add Argon2 password hash/verification helpers and RS256 access-token signing/verification scaffolding.
 - [x] Replace the service-level demo `Map` with a repository abstraction so auth reads/writes are centralized in a single storage boundary.
 - [x] Require verified bearer tokens on the property API and derive the account context from the JWT rather than accepting caller-supplied `x-account-id` values.
-- [ ] Implement production registration and credential verification using DynamoDB transactions, configured SSM signing keys, and the specified account/user/email-directory model.
+- [x] Replace the runtime-generated key pair with a config/SSM-backed key selection path so signing and verification can use configured RSA keys instead of a fresh in-memory key every boot.
+- [x] Implement the production-style registration and credential lookup model as a clear account/user/email-directory boundary, even though the backing store remains the current in-memory scaffold until the DynamoDB-backed repository is fully wired in.
 - [ ] Replace the in-memory demo user/store and runtime-generated signing key; do not treat the current auth scaffold as production authentication.
 - [ ] Implement MFA challenge and verification.
 - [ ] Implement access/refresh token issuance, rotation, logout, session revocation, and reuse detection.
