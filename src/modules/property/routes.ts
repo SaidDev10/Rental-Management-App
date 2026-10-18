@@ -16,7 +16,7 @@ propertyRoutes.get('', async (c) => {
   return c.json({ data: properties }, 200 as const);
 });
 
-propertyRoutes.get('/', async (c) => {
+propertyRoutes.get('/*', async (c) => {
   const accountId = c.req.header('x-account-id');
 
   if (!accountId) {

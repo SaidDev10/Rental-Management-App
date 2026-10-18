@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-The Rental Management App is a web-based application for **individual property owners in Morocco** to manage their long-term rental properties in one place. It replaces scattered spreadsheets and manual tracking with a centralized system for properties, tenants, leases, payments, documents, maintenance, and financial reporting.
+The Rental Management App is a web-based application for **individual property owners in Morocco** to manage their short-term and long-term residential rentals in one place. It replaces scattered spreadsheets and manual tracking with a centralized system for properties, tenants, leases, payments, documents, maintenance, and financial reporting.
 
 The application is inspired by existing Moroccan rental management platforms (Aqarrati, Kiraty) but is deliberately scoped to **single-owner accounts** — no agencies, no teams, no tenant logins.
 
@@ -39,7 +39,7 @@ Accounts are **manually provisioned by a Super Admin**. There are no subscriptio
 - Multi-user accounts, teams, or role-based permissions for end users
 - Agency / multi-owner management
 - Tenant self-service portal
-- Short-term / seasonal rental management (Airbnb, Booking, channel manager)
+- Airbnb/Booking channel-manager integrations and automated listing synchronization
 - Online payment processing
 - Bank integration or reconciliation
 - SMS notifications

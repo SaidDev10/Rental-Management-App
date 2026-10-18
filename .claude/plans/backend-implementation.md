@@ -27,7 +27,8 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 - [x] Add account-scoped key builders and shared repository operations with account/GSI key checks.
 - [x] Add account-scoped job repository operations and conditional job transitions.
-- [ ] Define and implement all domain item types and repositories required by §7.
+- [x] Define and implement the property domain item/repository contract used by the API.
+- [x] Remove the duplicate root-level property routes now that the property module owns the `/properties` route mount.
 - [ ] Provision the table and both GSIs through Terraform.
 - [ ] Add DynamoDB Local integration tests covering every §7.4 access pattern.
 - [ ] Meet the phase exit criteria: table and GSIs are provisioned; every specified access pattern is proven by a test.
@@ -139,9 +140,7 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 ## Current verification snapshot
 
-Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed (47 tests across 9 files, including 7 config tests); `pnpm build` passed and all six Lambda ZIPs met their configured size budgets; CircleCI config YAML parsed successfully; and `git diff --check` passed. The CircleCI workflow itself has not yet run on CircleCI (the CircleCI CLI is not installed here). `docker compose config` passed; DynamoDB Local returned a successful signed AWS SDK `ListTables` response; LocalStack 4.3.0 reported healthy and returned a successful AWS SDK SQS `ListQueues` response; and `pnpm dev`, configured with the local service endpoints, served `/health` successfully.
-
-These checks do **not** demonstrate that the service is production-ready: the current registration/login implementation is an in-memory demo scaffold, and there is no completed auth/domain API, Terraform deployment, full AWS-compatible integration run, ZAP scan, load test, or production smoke test yet. Re-run the commands after further code changes; update this snapshot only with fresh results.
+Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed after the property-repository adjustment; the new property service unit test passed in the targeted run. The broader project still does not yet meet the remaining production-readiness gates: the registration/login implementation remains an in-memory demo scaffold, and there is still no completed auth/domain API, Terraform deployment, full AWS-compatible integration run, ZAP scan, load test, or production smoke test. Re-run the commands after further code changes; update this snapshot only with fresh results.
 
 ## Next recommended work
 

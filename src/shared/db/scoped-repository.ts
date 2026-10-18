@@ -126,9 +126,7 @@ export const createScopedRepository = <T extends AccountItem>({
         },
         ExpressionAttributeValues: expressionValues,
         ...(options.limit === undefined ? {} : { Limit: options.limit }),
-        ...(options.exclusiveStartKey === undefined
-          ? {}
-          : { ExclusiveStartKey: options.exclusiveStartKey }),
+        ...(options.exclusiveStartKey === undefined ? {} : { ExclusiveStartKey: options.exclusiveStartKey }),
       }),
     );
 

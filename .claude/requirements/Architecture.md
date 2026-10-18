@@ -11,7 +11,7 @@
 
 ## 1. Executive Summary
 
-This document describes the technical architecture for the Rental Management App — a web-based application for individual property owners in Morocco to manage long-term rental properties.
+This document describes the technical architecture for the Rental Management App — a web-based application for individual property owners in Morocco to manage short-term and long-term residential rentals.
 
 This architecture follows a **Serverless Modular Monolith** pattern: a single Hono application running in a single AWS Lambda function, backed by a DynamoDB single-table design, with async workers for PDF generation, reporting, and notifications. All infrastructure is defined in Terraform and deployed to AWS `eu-west-1` (Ireland).
 

@@ -5,7 +5,7 @@ import { logger } from 'hono/logger';
 import { AppError } from './shared/errors';
 import { readApiConfig } from './shared/config';
 import { authRoutes } from './modules/auth';
-import { propertyRoutes, propertyService } from './modules/property';
+import { propertyRoutes } from './modules/property';
 
 const config = readApiConfig();
 
@@ -30,28 +30,6 @@ app.get('/health', (c) => {
 
 app.route('/auth', authRoutes);
 app.route('/properties', propertyRoutes);
-app.get('/properties', async (c) => {
-  const accountId = c.req.header('x-account-id');
-
-  if (!accountId) {
-    return c.json({ error: 'Missing account context' }, 401 as const);
-  }
-
-  const properties = await propertyService.list(accountId);
-
-  return c.json({ data: properties }, 200 as const);
-});
-app.get('/properties/', async (c) => {
-  const accountId = c.req.header('x-account-id');
-
-  if (!accountId) {
-    return c.json({ error: 'Missing account context' }, 401 as const);
-  }
-
-  const properties = await propertyService.list(accountId);
-
-  return c.json({ data: properties }, 200 as const);
-});
 
 app.notFound((c) => {
   return c.json(

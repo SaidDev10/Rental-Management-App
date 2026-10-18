@@ -27,30 +27,23 @@ export const sk = {
   summary: (yyyyMm: string): string => `SUMMARY#${requireValue('yyyyMm', yyyyMm)}`,
   counterQuittance: (): string => 'COUNTER#quittance',
   counterWhatsapp: (yyyyMm: string): string => `COUNTER#whatsapp#${requireValue('yyyyMm', yyyyMm)}`,
-  tenantLeaseLink: (tenantId: string, leaseId: string): string =>
-    `LINK#TENANT#${requireValue('tenantId', tenantId)}#LEASE#${requireValue('leaseId', leaseId)}`,
+  tenantLeaseLink: (tenantId: string, leaseId: string): string => `LINK#TENANT#${requireValue('tenantId', tenantId)}#LEASE#${requireValue('leaseId', leaseId)}`,
   idempotency: (key: string): string => `IDEMPOTENCY#${requireValue('idempotencyKey', key)}`,
   processed: (eventId: string): string => `PROCESSED#${requireValue('eventId', eventId)}`,
   active: (): string => 'ACTIVE',
   usedRefreshToken: (tokenHash: string): string => `USED#${requireValue('tokenHash', tokenHash)}`,
   otpPurpose: (purpose: string): string => requireValue('purpose', purpose),
-  auditEntry: (iso: string, id: string): string =>
-    `${requireValue('timestamp', iso)}#${requireValue('auditId', id)}`,
+  auditEntry: (iso: string, id: string): string => `${requireValue('timestamp', iso)}#${requireValue('auditId', id)}`,
 };
 
 export const gsi1 = {
-  property: (accountId: string, propertyId: string): string =>
-    `${pk.account(accountId)}#PROPERTY#${requireValue('propertyId', propertyId)}`,
-  lease: (accountId: string, leaseId: string): string =>
-    `${pk.account(accountId)}#LEASE#${requireValue('leaseId', leaseId)}`,
-  tenant: (accountId: string, tenantId: string): string =>
-    `${pk.account(accountId)}#TENANT#${requireValue('tenantId', tenantId)}`,
+  property: (accountId: string, propertyId: string): string => `${pk.account(accountId)}#PROPERTY#${requireValue('propertyId', propertyId)}`,
+  lease: (accountId: string, leaseId: string): string => `${pk.account(accountId)}#LEASE#${requireValue('leaseId', leaseId)}`,
+  tenant: (accountId: string, tenantId: string): string => `${pk.account(accountId)}#TENANT#${requireValue('tenantId', tenantId)}`,
   tenantDirectory: (accountId: string): string => `${pk.account(accountId)}#ACCOUNT#${requireValue('accountId', accountId)}`,
 };
 
 export const gsi2 = {
-  status: (accountId: string, status: string): string =>
-    `${pk.account(accountId)}#STATUS#${requireValue('status', status)}`,
-  email: (accountId: string, email: string): string =>
-    `${pk.account(accountId)}#EMAIL#${requireValue('email', email.trim().toLowerCase())}`,
+  status: (accountId: string, status: string): string => `${pk.account(accountId)}#STATUS#${requireValue('status', status)}`,
+  email: (accountId: string, email: string): string => `${pk.account(accountId)}#EMAIL#${requireValue('email', email.trim().toLowerCase())}`,
 };
