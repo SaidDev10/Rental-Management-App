@@ -11,7 +11,7 @@ jobs:
       - run:
           name: Install pinned pnpm
           command: |
-            curl -fsSL https://get.pnpm.io/install.sh | sh -
+            curl -fsSL https://get.pnpm.io/install.sh | SHELL="$(which bash)" bash -
             echo 'export PATH="$PNPM_HOME/bin:$PATH"' >> "$BASH_ENV"
             "$PNPM_HOME/bin/pnpm" config set store-dir ~/.pnpm-store
       - restore_cache:

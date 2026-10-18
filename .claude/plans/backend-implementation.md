@@ -44,7 +44,7 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 - [x] Replace the service-level demo `Map` with a repository abstraction so auth reads/writes are centralized in a single storage boundary.
 - [x] Require verified bearer tokens on the property API and derive the account context from the JWT rather than accepting caller-supplied `x-account-id` values.
 - [x] Replace the runtime-generated key pair with a config/SSM-backed key selection path so signing and verification can use configured RSA keys instead of a fresh in-memory key every boot.
-- [x] Implement the production-style registration and credential lookup model as a clear account/user/email-directory boundary, even though the backing store remains the current in-memory scaffold until the DynamoDB-backed repository is fully wired in.
+- [x] Implement the production-style registration and credential lookup model as a clear account/user/email-directory boundary using the DynamoDB transaction pattern when `TABLE_NAME` is configured, with a safe local fallback for dev/test bootstraps.
 - [ ] Replace the in-memory demo user/store and runtime-generated signing key; do not treat the current auth scaffold as production authentication.
 - [ ] Implement MFA challenge and verification.
 - [ ] Implement access/refresh token issuance, rotation, logout, session revocation, and reuse detection.
