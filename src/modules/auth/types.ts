@@ -29,6 +29,7 @@ export type AuthUser = {
   name: string;
   role: 'owner' | 'super_admin';
   locale: 'fr' | 'en';
+  mfaEnabled?: boolean;
 };
 
 export type AccountRecord = {
@@ -40,8 +41,25 @@ export type AccountRecord = {
 export type LoginResult = {
   token: string;
   accessToken: string;
+  refreshToken: string;
   accountId: string;
   user: AuthUser;
+};
+
+export type MfaChallengeResult = {
+  mfaRequired: true;
+  challengeToken: string;
+  expiresIn: number;
+};
+
+export type MfaVerifyInput = {
+  challengeToken: string;
+  code: string;
+};
+
+export type RefreshResult = {
+  accessToken: string;
+  refreshToken: string;
 };
 
 export type RegisterResult = {

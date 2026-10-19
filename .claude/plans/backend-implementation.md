@@ -37,7 +37,7 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 **Specification deliverable:** registration, login, MFA, refresh/logout, JWT, session model, and lockout.
 
-**Status: In progress — route, crypto, and repository scaffolding exist; the auth data access is still demo-backed and not yet production-safe**
+**Status: In progress — route, crypto, and repository scaffolding exist; the auth data access is still demo-backed and the refresh/session flow is only partially implemented in-memory**
 
 - [x] Add an API Gateway JWT authorizer entry point that validates RS256 claims and reads the public key from SSM.
 - [x] Add Argon2 password hash/verification helpers and RS256 access-token signing/verification scaffolding.
@@ -45,12 +45,21 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 - [x] Require verified bearer tokens on the property API and derive the account context from the JWT rather than accepting caller-supplied `x-account-id` values.
 - [x] Replace the runtime-generated key pair with a config/SSM-backed key selection path so signing and verification can use configured RSA keys instead of a fresh in-memory key every boot.
 - [x] Implement the production-style registration and credential lookup model as a clear account/user/email-directory boundary using the DynamoDB transaction pattern when `TABLE_NAME` is configured, with a safe local fallback for dev/test bootstraps.
+- [x] Add a Dynamo-backed session lifecycle path for configured auth tables, including create, lookup, rotation, and revoke operations with local fallback for dev/test bootstrap.
 - [ ] Replace the in-memory demo user/store and runtime-generated signing key; do not treat the current auth scaffold as production authentication.
-- [ ] Implement MFA challenge and verification.
-- [ ] Implement access/refresh token issuance, rotation, logout, session revocation, and reuse detection.
-- [ ] Implement login lockout, session model, and super-admin single-session enforcement.
-- [ ] Integrate verified claims and authoritative session checks into API request context; remove caller-supplied account identity.
-- [ ] Meet the phase exit criteria: token-reuse detection passes and super-admin single-session enforcement is tested.
+- [x] Implement MFA challenge and verification flow, including challenge issuance, verification, and resend path support in the service and routes.
+- [x] Implement access/refresh token issuance, rotation, logout, session revocation, and reuse detection.
+- [x] Implement login lockout and failed-attempt tracking.
+- [x] Implement single-session enforcement for super-admin sessions with authoritative session lookup in the auth middleware; full repository-backed persistence remains a separate production-hardening task.
+- [x] Ensure the auth service and middleware resolve the repository lazily per request so session checks follow the active runtime configuration rather than a stale module-level singleton.
+- [x] Harden the in-memory session model to track session lifecycle metadata (`issuedAt`, `expiresAt`, `revokedAt`) and consumed refresh-token state per family.
+- [x] Integrate verified claims and authoritative session checks into API request context; remove caller-supplied account identity.
+- [x] Meet the phase exit criteria: token-reuse detection passes and super-admin single-session enforcement is tested.
+
+### Verification snapshot
+- Focused auth tests pass: `pnpm vitest run test/unit/app.test.ts test/unit/auth-repository.test.ts`.
+- TypeScript check passes: `pnpm typecheck`.
+- Lint passes: `pnpm lint`.
 
 ## P3 — Core CRUD
 
@@ -143,11 +152,11 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 ## Current verification snapshot
 
-Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed after the property-repository adjustment; the new property service unit test passed in the targeted run. The broader project still does not yet meet the remaining production-readiness gates: the registration/login implementation remains an in-memory demo scaffold, and there is still no completed auth/domain API, Terraform deployment, full AWS-compatible integration run, ZAP scan, load test, or production smoke test. Re-run the commands after further code changes; update this snapshot only with fresh results.
+Latest validation: `pnpm vitest run test/unit/app.test.ts` and `pnpm typecheck` passed after adding lockout logic, refresh-token rotation, and replay/logout rejection coverage. The auth flow now enforces a 5-attempt lockout and keeps session rotations working in the app layer, but the implementation still remains demo-backed and incomplete for the production spec: the active session is still local-memory state rather than a fully persisted repository model, MFA and super-admin single-session enforcement remain outstanding, and the broader Terraform/AWS integration and security gates are not complete. Re-run the commands after further code changes; update this snapshot only with fresh results.
 
 ## Next recommended work
 
-1. Finish P0 by confirming the new workflow passes on CircleCI and meeting the phase exit criteria.
-2. Finish P1 repositories and DynamoDB Local integration tests.
-3. Implement P2 authentication before relying on any account context or building authenticated P3 endpoints.
-4. Continue P3 core CRUD, then wire the already-built async workers into authenticated domain endpoints and proceed through the remaining phase exit criteria.
+1. Replace the remaining demo-backed auth state with a true repository-backed session model and persist active session state for production use.
+2. Implement MFA and lockout in the auth flow, then add super-admin single-session enforcement with authoritative session checks.
+3. Finish P1 repositories and DynamoDB Local integration tests.
+4. Continue P3 core CRUD once the auth boundary is production-safe.

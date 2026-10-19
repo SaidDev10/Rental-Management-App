@@ -27,6 +27,14 @@ describe('auth service repository flow', () => {
         locale: 'fr',
         passwordHash: await hashPassword('supersecret123'),
       }),
+      createSession: async () => ({
+        userId: 'user_123',
+        accountId: 'demo-account',
+        email: 'owner@example.com',
+        role: 'owner',
+        sessionId: 'session_user_123',
+        familyId: 'family_user_123',
+      }),
       createAccountAndUser: async () => {
         throw new Error('not used');
       },
@@ -36,6 +44,10 @@ describe('auth service repository flow', () => {
       { email: 'owner@example.com', password: 'supersecret123' },
       repository as never,
     );
+
+    if ('mfaRequired' in result) {
+      throw new Error('Expected immediate login result, not MFA challenge');
+    }
 
     expect(result.accountId).toBe('demo-account');
     expect(result.user.email).toBe('owner@example.com');
@@ -128,6 +140,49 @@ describe('auth service repository flow', () => {
       SK: 'EMAIL#jane@example.com',
       accountId: expect.any(String),
       userId: expect.any(String),
+    });
+  });
+
+  it('loads the active session by user when the Dynamo session table is configured', async () => {
+    setDynamoAuthEnv();
+
+    const repository = createDynamoAuthRepository({
+      send: async (command: unknown) => {
+        if (command instanceof GetCommand) {
+          const input = command.input;
+          if (input.Key?.PK === 'SESSION#user_123' && input.Key?.SK === 'ACTIVE') {
+            return {
+              Item: {
+                PK: 'SESSION#user_123',
+                SK: 'ACTIVE',
+                entityType: 'Session',
+                userId: 'user_123',
+                accountId: 'account_123',
+                email: 'owner@example.com',
+                role: 'owner',
+                sessionId: 'session_123',
+                familyId: 'family_123',
+                refreshTokenHash: 'refresh_hash_123',
+                active: true,
+                issuedAt: '2024-01-01T00:00:00.000Z',
+                expiresAt: '2024-02-01T00:00:00.000Z',
+                revokedAt: null,
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-01T00:00:00.000Z',
+              },
+            };
+          }
+        }
+
+        return {};
+      },
+    } as unknown as DynamoDBDocumentClient);
+
+    await expect(repository.findSessionByUser('user_123')).resolves.toMatchObject({
+      sessionId: 'session_123',
+      accountId: 'account_123',
+      refreshTokenHash: 'refresh_hash_123',
+      active: true,
     });
   });
 
