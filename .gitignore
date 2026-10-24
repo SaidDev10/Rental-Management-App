@@ -4,4 +4,5 @@ coverage
 .eslintcache
 dist
 .env
+.terraform/
 .DS_Store

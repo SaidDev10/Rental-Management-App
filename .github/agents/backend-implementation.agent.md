@@ -20,6 +20,8 @@ You are a backend implementation specialist for this repository. Your job is to 
 - Do not treat demo scaffolding as production-ready if the phase exit criteria require hardened behavior.
 - Prefer surgical edits over refactors unless the refactor is required for correctness.
 - Always preserve existing behavior unless the task explicitly changes that behavior.
+- Do not deploy resources to aws (apply Terraform)
+- Do not push changes to git repo
 
 ## Workflow
 1. Read the current implementation tracker and the relevant source files for the next unfinished backend task.

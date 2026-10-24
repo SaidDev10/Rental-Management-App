@@ -2,13 +2,13 @@
 
 This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.claude/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
-**Overall status: P0 — Foundations in progress.** No phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
+**Overall status: P1 — Data layer in progress.** P0 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
 
 ## P0 — Foundations
 
 **Specification deliverable:** repository scaffold, config, logger, error taxonomy, base repository, ESLint, TypeScript configuration, local development stack, and CI pipeline.
 
-**Status: In progress**
+**Status: Complete**
 
 - [x] Create the pnpm project scaffold, TypeScript configuration, ESLint configuration, and unit-test runner.
 - [x] Add the Hono app, `/health` route, API Lambda adapter, shared logger, and shared error types.
@@ -17,21 +17,27 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 - [x] Complete and validate application configuration for the API, authorizer, and all worker roles; parse the API CORS allowlist from configuration.
 - [x] Start DynamoDB Local and LocalStack and verify `pnpm dev` with the local AWS endpoint configuration.
 - [x] Add CircleCI that installs from the frozen pnpm lockfile and runs typecheck, lint, unit tests, and Lambda builds.
-- [ ] Meet the phase exit criteria: `pnpm dev` serves `/health`; lint passes; CI passes.
+- [x] Meet the phase exit criteria: `pnpm dev` serves `/health`; lint passes; CI passes.
+
+### Verification snapshot
+- Started the dev server with the example local configuration and verified `GET /health` returned HTTP 200 with `{"ok":true,"service":"rental-api",...}`.
+- CI-equivalent checks passed: `pnpm typecheck`, `pnpm lint`, `pnpm test` (12 files, 59 tests), and `pnpm build` (all six Lambda bundles passed size checks).
 
 ## P1 — Data layer
 
 **Specification deliverable:** all item types, key builders, repositories, DynamoDB Local integration tests.
 
-**Status: In progress — foundations only**
+**Status: In progress — Terraform definition is validated; integration coverage is implemented but still needs to run against DynamoDB Local**
 
 - [x] Add account-scoped key builders and shared repository operations with account/GSI key checks.
 - [x] Add account-scoped job repository operations and conditional job transitions.
 - [x] Define and implement the property domain item/repository contract used by the API.
 - [x] Remove the duplicate root-level property routes now that the property module owns the `/properties` route mount.
 - [ ] Provision the table and both GSIs through Terraform.
-- [ ] Add DynamoDB Local integration tests covering every §7.4 access pattern.
+- [ ] Run DynamoDB Local integration tests covering every §7.4 access pattern.
 - [ ] Meet the phase exit criteria: table and GSIs are provisioned; every specified access pattern is proven by a test.
+
+Progress: Terraform configuration for the table and both GSIs is implemented and validated, but has not been applied to AWS. A local-only integration suite now exercises all 17 §7.4 patterns, including GSI queries followed by `BatchGetItem`; execution remains pending because Docker Desktop's Linux engine is unavailable.
 
 ## P2 — Auth
 
@@ -152,11 +158,10 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 ## Current verification snapshot
 
-Latest validation: `pnpm vitest run test/unit/app.test.ts` and `pnpm typecheck` passed after adding lockout logic, refresh-token rotation, and replay/logout rejection coverage. The auth flow now enforces a 5-attempt lockout and keeps session rotations working in the app layer, but the implementation still remains demo-backed and incomplete for the production spec: the active session is still local-memory state rather than a fully persisted repository model, MFA and super-admin single-session enforcement remain outstanding, and the broader Terraform/AWS integration and security gates are not complete. Re-run the commands after further code changes; update this snapshot only with fresh results.
+Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` pass (59 unit tests; the local-only DynamoDB integration suite is skipped without a local endpoint). `pnpm test:integration` fails explicitly when `DYNAMODB_ENDPOINT` is unset, and its runner rejects non-local hosts. The suite has not yet executed against DynamoDB Local because Docker Desktop's Linux engine is unavailable. Terraform formatting, validation, and dev/prod plans also pass; no AWS apply was run. P0 exit checks passed on 2026-10-24.
 
 ## Next recommended work
 
-1. Replace the remaining demo-backed auth state with a true repository-backed session model and persist active session state for production use.
-2. Implement MFA and lockout in the auth flow, then add super-admin single-session enforcement with authoritative session checks.
-3. Finish P1 repositories and DynamoDB Local integration tests.
-4. Continue P3 core CRUD once the auth boundary is production-safe.
+1. With Docker Desktop available, run `pnpm infra:up`, set `$env:DYNAMODB_ENDPOINT = 'http://localhost:8000'`, then run `pnpm test:integration`.
+2. Apply the validated table definition through the platform-managed Terraform state and approved AWS environment.
+3. Continue P1 repositories until the integration suite passes and all access patterns are proven.
