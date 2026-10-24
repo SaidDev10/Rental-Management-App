@@ -1,5 +1,5 @@
 resource "aws_dynamodb_table" "main" {
-  name                        = var.table_name
+  name                        = "${var.table_name}-${var.stage}-db"
   billing_mode                = "PAY_PER_REQUEST"
   hash_key                    = "PK"
   range_key                   = "SK"

@@ -5,4 +5,9 @@ coverage
 dist
 .env
 .terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
 .DS_Store

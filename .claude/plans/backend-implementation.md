@@ -27,17 +27,17 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 **Specification deliverable:** all item types, key builders, repositories, DynamoDB Local integration tests.
 
-**Status: In progress — Terraform definition is validated; integration coverage is implemented but still needs to run against DynamoDB Local**
+**Status: In progress — local access-pattern tests pass; dev S3 backend is initialized and plan reviewed**
 
 - [x] Add account-scoped key builders and shared repository operations with account/GSI key checks.
 - [x] Add account-scoped job repository operations and conditional job transitions.
 - [x] Define and implement the property domain item/repository contract used by the API.
 - [x] Remove the duplicate root-level property routes now that the property module owns the `/properties` route mount.
 - [ ] Provision the table and both GSIs through Terraform.
-- [ ] Run DynamoDB Local integration tests covering every §7.4 access pattern.
+- [x] Run DynamoDB Local integration tests covering every §7.4 access pattern.
 - [ ] Meet the phase exit criteria: table and GSIs are provisioned; every specified access pattern is proven by a test.
 
-Progress: Terraform configuration for the table and both GSIs is implemented and validated, but has not been applied to AWS. A local-only integration suite now exercises all 17 §7.4 patterns, including GSI queries followed by `BatchGetItem`; execution remains pending because Docker Desktop's Linux engine is unavailable.
+Progress: Terraform configuration for the table and both GSIs is implemented but has not been applied to AWS. The dev S3 backend is initialized against the approved `rental-management-terraform` bucket in `eu-north-1`; dev and prod have separate state keys and native S3 lockfiles. The local-only integration suite passes against DynamoDB Local and exercises all 17 §7.4 patterns, including GSI queries followed by `BatchGetItem`. A read-only `DescribeTable` in `eu-north-1` returned `ResourceNotFoundException` for `rental-app-main`. The fresh dev plan proposes only the creation of that table: one add, zero changes, zero destroys.
 
 ## P2 — Auth
 
@@ -158,10 +158,10 @@ Progress: Terraform configuration for the table and both GSIs is implemented and
 
 ## Current verification snapshot
 
-Latest validation: `pnpm typecheck`, `pnpm lint`, and `pnpm test` pass (59 unit tests; the local-only DynamoDB integration suite is skipped without a local endpoint). `pnpm test:integration` fails explicitly when `DYNAMODB_ENDPOINT` is unset, and its runner rejects non-local hosts. The suite has not yet executed against DynamoDB Local because Docker Desktop's Linux engine is unavailable. Terraform formatting, validation, and dev/prod plans also pass; no AWS apply was run. P0 exit checks passed on 2026-10-24.
+Latest validation (2026-10-24): `terraform init -input=false -backend-config backend.dev.hcl` succeeded and initialized the dev remote S3 backend. `terraform plan -input=false -var="stage=dev"` proposes `1 to add, 0 to change, 0 to destroy`: create `rental-app-main` with GSI1 (ALL), GSI2 (KEYS_ONLY), PITR, TTL, AWS-owned-key encryption, and NEW_AND_OLD_IMAGES streams; dev deletion protection is disabled. A read-only `DescribeTable` in `eu-north-1` returned `ResourceNotFoundException`. No apply was run. The local DynamoDB integration run passed all 17 §7.4 patterns; `pnpm typecheck` and `pnpm test` (59 unit tests) passed previously. No Git push was performed.
 
 ## Next recommended work
 
-1. With Docker Desktop available, run `pnpm infra:up`, set `$env:DYNAMODB_ENDPOINT = 'http://localhost:8000'`, then run `pnpm test:integration`.
-2. Apply the validated table definition through the platform-managed Terraform state and approved AWS environment.
-3. Continue P1 repositories until the integration suite passes and all access patterns are proven.
+1. Review the dev plan above and explicitly approve or decline the proposed table creation before any `terraform apply`.
+2. After an approved apply, verify the table and both GSIs in `eu-north-1`, then close the P1 provisioning item and phase exit gate.
+3. Initialize the separate prod backend and plan independently only when production deployment is requested.
