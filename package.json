@@ -13,6 +13,7 @@
     "lint:fix": "eslint . --fix --max-warnings 0",
     "test": "vitest run",
     "test:integration": "tsx scripts/test-dynamodb-integration.ts",
+    "test:auth-live": "tsx scripts/test-auth-live.ts",
     "build:api": "tsx esbuild.config.ts api-handler",
     "build:authorizer": "tsx esbuild.config.ts authorizer",
     "build:pdf": "tsx esbuild.config.ts pdf-worker",

@@ -106,6 +106,38 @@ describe('backend skeleton', () => {
     expect(refreshed.accessToken).toBeTypeOf('string');
     expect(refreshed.refreshToken).toBeTypeOf('string');
 
+    const invalidRefreshResponse = await app.request('http://localhost/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: 'unrecognized-refresh-token' }),
+    });
+    expect(invalidRefreshResponse.status).toBe(401);
+    expect(await invalidRefreshResponse.json()).toMatchObject({ error: { code: 'INVALID_REFRESH' } });
+
+    const refreshedAgainResponse = await app.request('http://localhost/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refreshed.refreshToken }),
+    });
+    expect(refreshedAgainResponse.status).toBe(200);
+    const refreshedAgain = (await refreshedAgainResponse.json()) as { refreshToken: string };
+
+    const reuseResponse = await app.request('http://localhost/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    expect(reuseResponse.status).toBe(401);
+    expect(await reuseResponse.json()).toMatchObject({ error: { code: 'SESSION_REVOKED' } });
+
+    const revokedSessionResponse = await app.request('http://localhost/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refreshedAgain.refreshToken }),
+    });
+    expect(revokedSessionResponse.status).toBe(401);
+    expect(await revokedSessionResponse.json()).toMatchObject({ error: { code: 'SESSION_REVOKED' } });
+
     const logoutResponse = await app.request('http://localhost/auth/logout', {
       method: 'POST',
       headers: {

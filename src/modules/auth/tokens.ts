@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID } from 'node:crypto';
 
 import { SignJWT, jwtVerify } from 'jose';
 
@@ -24,13 +24,21 @@ const loadPemKeyPair = async (): Promise<{ privateKey: ReturnType<typeof createP
   const explicitPrivateKey = process.env.JWT_PRIVATE_KEY;
   const explicitPublicKey = process.env.JWT_PUBLIC_KEY;
   const secretPrefix = process.env.SSM_PARAM_PREFIX;
-  const useSsmKeys = process.env.USE_SSM_JWT_KEYS === 'true';
+  const useSsmKeys = process.env.USE_SSM_JWT_KEYS === 'true' || process.env.STAGE === 'prod';
 
-  if (explicitPrivateKey && explicitPublicKey) {
+  if (Boolean(explicitPrivateKey) !== Boolean(explicitPublicKey)) {
+    throw new Error('JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must be configured together.');
+  }
+
+  if (process.env.STAGE !== 'prod' && explicitPrivateKey && explicitPublicKey) {
     return {
       privateKey: createPrivateKey(explicitPrivateKey),
       publicKey: createPublicKey(explicitPublicKey),
     };
+  }
+
+  if (useSsmKeys && !secretPrefix) {
+    throw new Error('SSM_PARAM_PREFIX is required to load JWT keys from SSM.');
   }
 
   if (useSsmKeys && secretPrefix) {
@@ -45,29 +53,19 @@ const loadPemKeyPair = async (): Promise<{ privateKey: ReturnType<typeof createP
     };
   }
 
-  const generated = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: {
-      type: 'spki',
-      format: 'pem',
-    },
-    privateKeyEncoding: {
-      type: 'pkcs8',
-      format: 'pem',
-    },
-  });
-
-  return {
-    privateKey: createPrivateKey(generated.privateKey),
-    publicKey: createPublicKey(generated.publicKey),
-  };
+  throw new Error('JWT keys must be configured using PEM keys or SSM.');
 };
 
 const getKeyPair = async () => {
   const cacheKey = JSON.stringify({
-    privateKey: Boolean(process.env.JWT_PRIVATE_KEY),
-    publicKey: Boolean(process.env.JWT_PUBLIC_KEY),
+    privateKey: process.env.JWT_PRIVATE_KEY
+      ? createHash('sha256').update(process.env.JWT_PRIVATE_KEY).digest('hex')
+      : '',
+    publicKey: process.env.JWT_PUBLIC_KEY
+      ? createHash('sha256').update(process.env.JWT_PUBLIC_KEY).digest('hex')
+      : '',
     useSsmKeys: process.env.USE_SSM_JWT_KEYS === 'true',
+    stage: process.env.STAGE ?? '',
     secretPrefix: process.env.SSM_PARAM_PREFIX ?? '',
   });
 

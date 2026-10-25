@@ -104,8 +104,8 @@ export const authService = {
     }
 
     const refreshToken = generateRefreshToken();
-    const sessionId = `session_${userRecord.id}`;
-    const familyId = `family_${userRecord.id}`;
+    const sessionId = `session_${randomUUID()}`;
+    const familyId = `family_${randomUUID()}`;
 
     await repository.createSession({
       userId: userRecord.id,
@@ -146,10 +146,21 @@ export const authService = {
       throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH');
     }
 
-    const session = await repository.findSessionByRefreshTokenHash(hashRefreshToken(currentRefreshToken));
+    const refreshTokenHash = hashRefreshToken(currentRefreshToken);
+    const session = await repository.findSessionByRefreshTokenHash(refreshTokenHash);
 
     if (!session) {
       throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH');
+    }
+
+    if (session.consumedRefreshToken) {
+      await repository.revokeSessionAfterRefreshTokenReuse({
+        userId: session.userId,
+        sessionId: session.sessionId,
+        familyId: session.familyId,
+        refreshTokenHash,
+      });
+      throw new AppError('Session revoked', 401, 'SESSION_REVOKED');
     }
 
     if (!session.active) {
@@ -215,8 +226,8 @@ export const authService = {
     }
 
     const refreshToken = generateRefreshToken();
-    const sessionId = `session_${userRecord.id}`;
-    const familyId = `family_${userRecord.id}`;
+    const sessionId = `session_${randomUUID()}`;
+    const familyId = `family_${randomUUID()}`;
 
     await repository.createSession({
       userId: userRecord.id,

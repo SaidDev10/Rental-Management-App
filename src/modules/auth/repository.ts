@@ -1,4 +1,7 @@
-import { GetCommand, PutCommand, ScanCommand, TransactWriteCommand, UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { randomUUID } from 'node:crypto';
+
+import { GetCommand, PutCommand, ScanCommand, TransactWriteCommand, UpdateCommand, type DynamoDBDocumentClient, type ScanCommandInput } from '@aws-sdk/lib-dynamodb';
+import { ulid } from 'ulid';
 
 import { getDocumentClient } from '../../shared/db';
 import { pk, sk } from '../../shared/db/keys';
@@ -25,6 +28,7 @@ export type SessionRecord = {
   revokedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  consumedRefreshToken?: boolean;
 };
 
 export type AuthRepository = {
@@ -54,6 +58,12 @@ export type AuthRepository = {
     updatedAt?: string;
   }) => Promise<SessionRecord>;
   revokeSession: (userId: string, sessionId: string) => Promise<void>;
+  revokeSessionAfterRefreshTokenReuse: (input: {
+    userId: string;
+    sessionId: string;
+    familyId: string;
+    refreshTokenHash: string;
+  }) => Promise<boolean>;
 };
 
 const usersByEmail = new Map<string, AuthUserRecord>();
@@ -66,13 +76,28 @@ const usedRefreshTokensByUser = new Map<string, Set<string>>();
 
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
-const isResourceNotFound = (error: unknown): boolean => {
-  return !!(
-    error &&
-    typeof error === 'object' &&
-    'name' in error &&
-    (error as { name?: string }).name === 'ResourceNotFoundException'
-  );
+const usesDynamoAuth = (): boolean => {
+  if (process.env.STAGE === 'prod' || process.env.USE_DYNAMO_AUTH === 'true') {
+    return true;
+  }
+
+  if (
+    (process.env.STAGE === 'dev' || process.env.STAGE === 'test') &&
+    process.env.USE_DYNAMO_AUTH === 'false'
+  ) {
+    return false;
+  }
+
+  throw new Error('Auth storage must use DynamoDB, or be explicitly disabled for dev/test only.');
+};
+
+const getAuthTableName = (): string => {
+  const tableName = process.env.TABLE_NAME;
+  if (!tableName) {
+    throw new Error('TABLE_NAME must be configured for DynamoDB auth.');
+  }
+
+  return tableName;
 };
 
 const isDuplicateEmailFailure = (error: unknown): boolean => {
@@ -176,8 +201,8 @@ const getLocalAuthRepository = (): AuthRepository => ({
       throw new Error('Email already taken');
     }
 
-    const accountId = `account_${Math.random().toString(36).slice(2, 10)}`;
-    const userId = `user_${Math.random().toString(36).slice(2, 10)}`;
+    const accountId = `account_${randomUUID()}`;
+    const userId = `user_${randomUUID()}`;
     const user: AuthUser = {
       id: userId,
       accountId,
@@ -241,6 +266,15 @@ const getLocalAuthRepository = (): AuthRepository => ({
     }
 
     const current = sessionsByUserId.get(session.userId);
+
+    if (usedRefreshTokensByUser.get(session.userId)?.has(refreshTokenHash)) {
+      return {
+        ...session,
+        refreshTokenHash,
+        active: false,
+        consumedRefreshToken: true,
+      };
+    }
 
     return current && current.refreshTokenHash === refreshTokenHash ? current : session;
   },
@@ -310,74 +344,84 @@ const getLocalAuthRepository = (): AuthRepository => ({
       updatedAt: new Date().toISOString(),
     };
 
-    const usedHashes = usedRefreshTokensByUser.get(userId) ?? new Set<string>();
-    usedHashes.add(session.refreshTokenHash);
-    usedRefreshTokensByUser.set(userId, usedHashes);
-
     sessionsByUserId.set(userId, revokedSession);
     sessionsByRefreshHash.set(session.refreshTokenHash, revokedSession);
+  },
+
+  async revokeSessionAfterRefreshTokenReuse({ userId, sessionId, familyId, refreshTokenHash }) {
+    if (!usedRefreshTokensByUser.get(userId)?.has(refreshTokenHash)) {
+      return false;
+    }
+
+    const session = sessionsByUserId.get(userId);
+    if (!session || session.sessionId !== sessionId || session.familyId !== familyId || !session.active) {
+      return true;
+    }
+
+    const now = new Date().toISOString();
+    const revokedSession: SessionRecord = {
+      ...session,
+      active: false,
+      revokedAt: now,
+      updatedAt: now,
+    };
+    sessionsByUserId.set(userId, revokedSession);
+    sessionsByRefreshHash.set(session.refreshTokenHash, revokedSession);
+
+    return true;
   },
 });
 
 export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): AuthRepository => ({
   async findUserByEmail(email: string): Promise<AuthUserRecord | undefined> {
     const normalizedEmail = normalizeEmail(email);
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().findUserByEmail(email);
     }
 
-    try {
-      const directoryResult = await client.send(
-        new GetCommand({
-          TableName: tableName,
-          Key: { PK: 'SYSTEM', SK: `EMAIL#${normalizedEmail}` },
-          ConsistentRead: true,
-        }),
-      );
+    const tableName = getAuthTableName();
+    const directoryResult = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { PK: 'SYSTEM', SK: `EMAIL#${normalizedEmail}` },
+        ConsistentRead: true,
+      }),
+    );
 
-      const directoryItem = directoryResult.Item as Record<string, unknown> | undefined;
-      if (!directoryItem) {
-        return undefined;
-      }
-
-      const accountId = String(directoryItem.accountId ?? '');
-      const userId = String(directoryItem.userId ?? '');
-      if (!accountId || !userId) {
-        return undefined;
-      }
-
-      const userResult = await client.send(
-        new GetCommand({
-          TableName: tableName,
-          Key: { PK: pk.account(accountId), SK: sk.user(userId) },
-          ConsistentRead: true,
-        }),
-      );
-
-      const userItem = userResult.Item as Record<string, unknown> | undefined;
-      if (!userItem) {
-        return undefined;
-      }
-
-      return toAuthUserRecord(userItem);
-    } catch (error) {
-      if (isResourceNotFound(error)) {
-        return getLocalAuthRepository().findUserByEmail(email);
-      }
-
-      throw error;
+    const directoryItem = directoryResult.Item as Record<string, unknown> | undefined;
+    if (!directoryItem) {
+      return undefined;
     }
+
+    const accountId = String(directoryItem.accountId ?? '');
+    const userId = String(directoryItem.userId ?? '');
+    if (!accountId || !userId) {
+      return undefined;
+    }
+
+    const userResult = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { PK: pk.account(accountId), SK: sk.user(userId) },
+        ConsistentRead: true,
+      }),
+    );
+
+    const userItem = userResult.Item as Record<string, unknown> | undefined;
+    if (!userItem) {
+      return undefined;
+    }
+
+    return toAuthUserRecord(userItem);
   },
 
   async createAccountAndUser({ accountName, ownerName, email, passwordHash, locale }) {
     const normalizedEmail = normalizeEmail(email);
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().createAccountAndUser({
         accountName,
         ownerName,
@@ -387,8 +431,9 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
       });
     }
 
-    const accountId = `account_${Math.random().toString(36).slice(2, 10)}`;
-    const userId = `user_${Math.random().toString(36).slice(2, 10)}`;
+    const tableName = getAuthTableName();
+    const accountId = `account_${randomUUID()}`;
+    const userId = `user_${randomUUID()}`;
     const now = new Date().toISOString();
     const account: AccountRecord = {
       id: accountId,
@@ -479,28 +524,18 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
         throw new Error('Email already taken');
       }
 
-      if (isResourceNotFound(error)) {
-        return getLocalAuthRepository().createAccountAndUser({
-          accountName,
-          ownerName,
-          email: normalizedEmail,
-          passwordHash,
-          locale,
-        });
-      }
-
       throw error;
     }
   },
 
   async createSession(input) {
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().createSession(input);
     }
 
+    const tableName = getAuthTableName();
     const now = new Date();
     const issuedAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -534,44 +569,62 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
   },
 
   async findSessionByRefreshTokenHash(refreshTokenHash: string) {
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().findSessionByRefreshTokenHash(refreshTokenHash);
     }
 
-    const result = await client.send(
-      new ScanCommand({
-        TableName: tableName,
-        FilterExpression: '#entityType = :session AND #refreshTokenHash = :refreshTokenHash',
-        ExpressionAttributeNames: {
-          '#entityType': 'entityType',
-          '#refreshTokenHash': 'refreshTokenHash',
-        },
-        ExpressionAttributeValues: {
-          ':session': 'Session',
-          ':refreshTokenHash': refreshTokenHash,
-        },
-      }),
-    );
+    const tableName = getAuthTableName();
+    let exclusiveStartKey: ScanCommandInput['ExclusiveStartKey'];
 
-    const sessionItem = result.Items?.find((item) => item.active !== false) ?? result.Items?.[0];
-    if (!sessionItem) {
-      return undefined;
-    }
+    do {
+      const result = await client.send(
+        new ScanCommand({
+          TableName: tableName,
+          ConsistentRead: true,
+          ExclusiveStartKey: exclusiveStartKey,
+          FilterExpression: '(#entityType = :session OR #entityType = :consumed) AND #refreshTokenHash = :refreshTokenHash',
+          ExpressionAttributeNames: {
+            '#entityType': 'entityType',
+            '#refreshTokenHash': 'refreshTokenHash',
+          },
+          ExpressionAttributeValues: {
+            ':session': 'Session',
+            ':consumed': 'ConsumedRefreshToken',
+            ':refreshTokenHash': refreshTokenHash,
+          },
+        }),
+      );
 
-    return toSessionRecord(sessionItem);
+      const sessionItem = result.Items?.find((item) => item.entityType === 'Session');
+      if (sessionItem) {
+        return toSessionRecord(sessionItem);
+      }
+
+      const consumedItem = result.Items?.find((item) => item.entityType === 'ConsumedRefreshToken');
+      if (consumedItem) {
+        return {
+          ...toSessionRecord(consumedItem),
+          active: false,
+          consumedRefreshToken: true,
+        };
+      }
+
+      exclusiveStartKey = result.LastEvaluatedKey;
+    } while (exclusiveStartKey);
+
+    return undefined;
   },
 
   async findSessionByUser(userId: string, sessionId?: string) {
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().findSessionByUser(userId, sessionId);
     }
 
+    const tableName = getAuthTableName();
     const result = await client.send(
       new GetCommand({
         TableName: tableName,
@@ -595,13 +648,13 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
   },
 
   async rotateSession(input) {
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().rotateSession(input);
     }
 
+    const tableName = getAuthTableName();
     const sessionItem = await client.send(
       new GetCommand({
         TableName: tableName,
@@ -655,9 +708,12 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
                 sessionId: currentSession.sessionId,
                 userId: currentSession.userId,
                 accountId: currentSession.accountId,
+                email: currentSession.email,
+                role: currentSession.role,
                 familyId: currentSession.familyId,
                 refreshTokenHash: currentSession.refreshTokenHash,
                 expiresAt: currentSession.expiresAt,
+                ttl: Math.floor(new Date(currentSession.expiresAt).getTime() / 1000),
                 createdAt: now,
                 updatedAt: now,
               },
@@ -672,13 +728,13 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
   },
 
   async revokeSession(userId: string, sessionId: string) {
-    const tableName = process.env.TABLE_NAME;
-    const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+    const shouldUseDynamoAuth = usesDynamoAuth();
 
-    if (!tableName || !shouldUseDynamoAuth) {
+    if (!shouldUseDynamoAuth) {
       return getLocalAuthRepository().revokeSession(userId, sessionId);
     }
 
+    const tableName = getAuthTableName();
     const currentItem = await client.send(
       new GetCommand({
         TableName: tableName,
@@ -708,15 +764,118 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
       }),
     );
   },
+
+  async revokeSessionAfterRefreshTokenReuse({ userId, sessionId, familyId, refreshTokenHash }) {
+    const tableName = getAuthTableName();
+    const markerResult = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { PK: pk.session(userId), SK: sk.usedRefreshToken(refreshTokenHash) },
+        ConsistentRead: true,
+      }),
+    );
+    const marker = markerResult.Item as Record<string, unknown> | undefined;
+    if (!marker || marker.entityType !== 'ConsumedRefreshToken' || marker.familyId !== familyId) {
+      return false;
+    }
+
+    const currentResult = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { PK: pk.session(userId), SK: sk.active() },
+        ConsistentRead: true,
+      }),
+    );
+    const current = currentResult.Item as Record<string, unknown> | undefined;
+    if (
+      !current ||
+      current.active !== true ||
+      current.sessionId !== sessionId ||
+      current.familyId !== familyId
+    ) {
+      return true;
+    }
+
+    const now = new Date().toISOString();
+    try {
+      await client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              ConditionCheck: {
+                TableName: tableName,
+                Key: { PK: pk.session(userId), SK: sk.usedRefreshToken(refreshTokenHash) },
+                ConditionExpression: 'attribute_exists(PK) AND familyId = :familyId',
+                ExpressionAttributeValues: { ':familyId': familyId },
+              },
+            },
+            {
+              Update: {
+                TableName: tableName,
+                Key: { PK: pk.session(userId), SK: sk.active() },
+                UpdateExpression: 'SET active = :false, revokedAt = :revokedAt, updatedAt = :updatedAt',
+                ConditionExpression: 'sessionId = :sessionId AND familyId = :familyId AND active = :true',
+                ExpressionAttributeValues: {
+                  ':false': false,
+                  ':true': true,
+                  ':revokedAt': now,
+                  ':updatedAt': now,
+                  ':sessionId': sessionId,
+                  ':familyId': familyId,
+                },
+              },
+            },
+            {
+              Put: {
+                TableName: tableName,
+                Item: {
+                  PK: pk.audit(String(marker.accountId)),
+                  SK: sk.auditEntry(now, ulid()),
+                  entityType: 'SecurityEvent',
+                  actorUserId: userId,
+                  actorRole: marker.role,
+                  action: 'AUTH_REFRESH_TOKEN_REUSE',
+                  targetType: 'Session',
+                  targetId: sessionId,
+                  outcome: 'failure',
+                  metadata: { familyId },
+                  createdAt: now,
+                },
+              },
+            },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (!error || typeof error !== 'object' || !('name' in error) || error.name !== 'TransactionCanceledException') {
+        throw error;
+      }
+
+      const latestResult = await client.send(
+        new GetCommand({
+          TableName: tableName,
+          Key: { PK: pk.session(userId), SK: sk.active() },
+          ConsistentRead: true,
+        }),
+      );
+      const latest = latestResult.Item as Record<string, unknown> | undefined;
+      if (latest?.active === true && latest.sessionId === sessionId && latest.familyId === familyId) {
+        throw error;
+      }
+    }
+
+    return true;
+  },
 });
 
 export const createAuthRepository = (): AuthRepository => {
-  const tableName = process.env.TABLE_NAME;
-  const shouldUseDynamoAuth = process.env.USE_DYNAMO_AUTH === 'true';
+  const shouldUseDynamoAuth = usesDynamoAuth();
 
-  if (!tableName || !shouldUseDynamoAuth) {
+  if (!shouldUseDynamoAuth) {
     return getLocalAuthRepository();
   }
+
+  getAuthTableName();
 
   return createDynamoAuthRepository(getDocumentClient());
 };

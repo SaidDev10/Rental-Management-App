@@ -1,7 +1,7 @@
-import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createDynamoAuthRepository } from '../../src/modules/auth/repository';
+import { createAuthRepository, createDynamoAuthRepository } from '../../src/modules/auth/repository';
 import { hashPassword } from '../../src/modules/auth/passwords';
 import { authService } from '../../src/modules/auth/service';
 
@@ -186,6 +186,142 @@ describe('auth service repository flow', () => {
     });
   });
 
+  it('recognizes consumed refresh-token markers for reuse handling', async () => {
+    setDynamoAuthEnv();
+    const repository = createDynamoAuthRepository({
+      send: async (command: unknown) => {
+        if (command instanceof ScanCommand) {
+          return {
+            Items: [
+              {
+                PK: 'SESSION#user_123',
+                SK: 'USED#refresh_hash_123',
+                entityType: 'ConsumedRefreshToken',
+                userId: 'user_123',
+                accountId: 'account_123',
+                email: 'owner@example.com',
+                role: 'owner',
+                sessionId: 'session_123',
+                familyId: 'family_123',
+                refreshTokenHash: 'refresh_hash_123',
+                active: false,
+                expiresAt: '2024-02-01T00:00:00.000Z',
+              },
+            ],
+          };
+        }
+
+        return {};
+      },
+    } as unknown as DynamoDBDocumentClient);
+
+    await expect(repository.findSessionByRefreshTokenHash('refresh_hash_123')).resolves.toMatchObject({
+      sessionId: 'session_123',
+      familyId: 'family_123',
+      consumedRefreshToken: true,
+      active: false,
+    });
+  });
+
+  it('atomically revokes the active family and records a security event on confirmed token reuse', async () => {
+    setDynamoAuthEnv();
+    let transaction: Record<string, unknown> | undefined;
+    const repository = createDynamoAuthRepository({
+      send: async (command: unknown) => {
+        if (command instanceof GetCommand) {
+          if (command.input.Key?.SK === 'USED#refresh_hash_123') {
+            return {
+              Item: {
+                entityType: 'ConsumedRefreshToken',
+                userId: 'user_123',
+                accountId: 'account_123',
+                role: 'owner',
+                sessionId: 'session_123',
+                familyId: 'family_123',
+                refreshTokenHash: 'refresh_hash_123',
+              },
+            };
+          }
+
+          return {
+            Item: {
+              entityType: 'Session',
+              userId: 'user_123',
+              accountId: 'account_123',
+              sessionId: 'session_123',
+              familyId: 'family_123',
+              active: true,
+            },
+          };
+        }
+
+        if (command instanceof TransactWriteCommand) {
+          transaction = command.input as Record<string, unknown>;
+        }
+
+        return {};
+      },
+    } as unknown as DynamoDBDocumentClient);
+
+    await expect(
+      repository.revokeSessionAfterRefreshTokenReuse({
+        userId: 'user_123',
+        sessionId: 'session_123',
+        familyId: 'family_123',
+        refreshTokenHash: 'refresh_hash_123',
+      }),
+    ).resolves.toBe(true);
+
+    const items = transaction?.TransactItems as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(3);
+    expect(items?.[0]?.ConditionCheck).toMatchObject({
+      Key: { PK: 'SESSION#user_123', SK: 'USED#refresh_hash_123' },
+    });
+    expect(items?.[1]?.Update).toMatchObject({
+      Key: { PK: 'SESSION#user_123', SK: 'ACTIVE' },
+    });
+    expect(items?.[2]?.Put).toMatchObject({
+      Item: {
+        PK: 'AUDIT#account_123',
+        entityType: 'SecurityEvent',
+        action: 'AUTH_REFRESH_TOKEN_REUSE',
+        targetId: 'session_123',
+      },
+    });
+  });
+
+  it('revokes the active local session family when a consumed token is replayed', async () => {
+    process.env.STAGE = 'dev';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const repository = createAuthRepository();
+    const session = await repository.createSession({
+      userId: 'user_replay_test',
+      accountId: 'account_replay_test',
+      email: 'replay@example.test',
+      role: 'owner',
+      sessionId: 'session_replay_test',
+      familyId: 'family_replay_test',
+      refreshTokenHash: 'refresh_hash_old',
+    });
+    await repository.rotateSession({
+      userId: session.userId,
+      sessionId: session.sessionId,
+      nextRefreshTokenHash: 'refresh_hash_current',
+    });
+
+    const consumedSession = await repository.findSessionByRefreshTokenHash('refresh_hash_old');
+    expect(consumedSession?.consumedRefreshToken).toBe(true);
+
+    await repository.revokeSessionAfterRefreshTokenReuse({
+      userId: session.userId,
+      sessionId: session.sessionId,
+      familyId: session.familyId,
+      refreshTokenHash: 'refresh_hash_old',
+    });
+
+    await expect(repository.findSessionByUser(session.userId)).resolves.toBeUndefined();
+  });
+
   it('translates duplicate-email repository errors into a 409 registration error', async () => {
     const repository = {
       findUserByEmail: async () => undefined,
@@ -207,5 +343,50 @@ describe('auth service repository flow', () => {
         repository as never,
       ),
     ).rejects.toMatchObject({ status: 409, code: 'EMAIL_TAKEN' });
+  });
+
+  it('requires DynamoDB auth storage in production even when the local fallback flag is false', () => {
+    const previousStage = process.env.STAGE;
+    const previousTableName = process.env.TABLE_NAME;
+    const previousUseDynamo = process.env.USE_DYNAMO_AUTH;
+    process.env.STAGE = 'prod';
+    delete process.env.TABLE_NAME;
+    process.env.USE_DYNAMO_AUTH = 'false';
+
+    try {
+      expect(() => createAuthRepository()).toThrow('TABLE_NAME must be configured for DynamoDB auth.');
+    } finally {
+      if (previousStage === undefined) {
+        delete process.env.STAGE;
+      } else {
+        process.env.STAGE = previousStage;
+      }
+
+      if (previousTableName === undefined) {
+        delete process.env.TABLE_NAME;
+      } else {
+        process.env.TABLE_NAME = previousTableName;
+      }
+
+      if (previousUseDynamo === undefined) {
+        delete process.env.USE_DYNAMO_AUTH;
+      } else {
+        process.env.USE_DYNAMO_AUTH = previousUseDynamo;
+      }
+    }
+  });
+
+  it('does not fall back to process-local auth when the configured DynamoDB table is missing', async () => {
+    setDynamoAuthEnv();
+    const missingTableError = Object.assign(new Error('Table not found'), {
+      name: 'ResourceNotFoundException',
+    });
+    const repository = createDynamoAuthRepository({
+      send: async () => {
+        throw missingTableError;
+      },
+    } as unknown as DynamoDBDocumentClient);
+
+    await expect(repository.findUserByEmail('owner@example.com')).rejects.toBe(missingTableError);
   });
 });

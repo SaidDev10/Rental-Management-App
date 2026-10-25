@@ -2,7 +2,7 @@
 
 This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.claude/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
-**Overall status: P2 — Auth in progress.** P0 and P1 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
+**Overall status: P2 — Auth complete; P3 — Core CRUD is next.** P0, P1, and P2 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
 
 ## P0 — Foundations
 
@@ -43,7 +43,7 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** registration, login, MFA, refresh/logout, JWT, session model, and lockout.
 
-**Status: In progress — route, crypto, and repository scaffolding exist; the auth data access is still demo-backed and the refresh/session flow is only partially implemented in-memory**
+**Status: Complete — local auth tests and user-reported live dev AWS integration passed**
 
 - [x] Add an API Gateway JWT authorizer entry point that validates RS256 claims and reads the public key from SSM.
 - [x] Add Argon2 password hash/verification helpers and RS256 access-token signing/verification scaffolding.
@@ -52,20 +52,24 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - [x] Replace the runtime-generated key pair with a config/SSM-backed key selection path so signing and verification can use configured RSA keys instead of a fresh in-memory key every boot.
 - [x] Implement the production-style registration and credential lookup model as a clear account/user/email-directory boundary using the DynamoDB transaction pattern when `TABLE_NAME` is configured, with a safe local fallback for dev/test bootstraps.
 - [x] Add a Dynamo-backed session lifecycle path for configured auth tables, including create, lookup, rotation, and revoke operations with local fallback for dev/test bootstrap.
-- [ ] Replace the in-memory demo user/store and runtime-generated signing key; do not treat the current auth scaffold as production authentication.
+- [x] Prevent production use of the in-memory demo auth store and runtime-generated signing keys; production requires DynamoDB and loads signing keys from SSM, with fail-closed behavior.
 - [x] Implement MFA challenge and verification flow, including challenge issuance, verification, and resend path support in the service and routes.
 - [x] Implement access/refresh token issuance, rotation, logout, session revocation, and reuse detection.
 - [x] Implement login lockout and failed-attempt tracking.
-- [x] Implement single-session enforcement for super-admin sessions with authoritative session lookup in the auth middleware; full repository-backed persistence remains a separate production-hardening task.
+- [x] Implement single-session enforcement for super-admin sessions with authoritative session lookup in the configured auth repository.
 - [x] Ensure the auth service and middleware resolve the repository lazily per request so session checks follow the active runtime configuration rather than a stale module-level singleton.
 - [x] Harden the in-memory session model to track session lifecycle metadata (`issuedAt`, `expiresAt`, `revokedAt`) and consumed refresh-token state per family.
 - [x] Integrate verified claims and authoritative session checks into API request context; remove caller-supplied account identity.
 - [x] Meet the phase exit criteria: token-reuse detection passes and super-admin single-session enforcement is tested.
 
 ### Verification snapshot
-- Focused auth tests pass: `pnpm vitest run test/unit/app.test.ts test/unit/auth-repository.test.ts`.
+- Focused auth tests pass: `pnpm vitest run test/unit/auth-repository.test.ts test/unit/auth-token-keys.test.ts test/unit/app.test.ts` (21 tests).
+- Production repository selection is tested to fail when `TABLE_NAME` is missing, even if `USE_DYNAMO_AUTH=false`; a missing DynamoDB table error is propagated rather than falling back to local state.
+- JWT token signing rejects absent configured keys; test-only keys are generated in `test/setup.ts`. Production uses SSM even if PEM env keys are present.
+- Replaying a consumed refresh token now atomically revokes its still-active family and writes a `SecurityEvent`; unknown tokens return `INVALID_REFRESH` without revoking the current session. Consumed-token markers use the session's absolute-expiry TTL.
+- Added `pnpm run test:auth-live`, an explicit dev-only integration runner for registration, login, invalid-token handling, rotation, replay revocation, logout, and cleanup. It requires explicit live-run/write opt-in and rejects LocalStack test credentials.
 - TypeScript check passes: `pnpm typecheck`.
-- Lint passes: `pnpm lint`.
+- Targeted ESLint passes for the changed auth and test files.
 
 ## P3 — Core CRUD
 
@@ -158,10 +162,9 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 ## Current verification snapshot
 
-Latest validation (2026-10-25): `terraform init -reconfigure -input=false -backend-config backend.dev.hcl`, `terraform validate`, and `terraform plan -input=false -var="stage=dev"` succeeded; the plan showed the expected `rental-app-dev-db` creation. The user subsequently applied the plan and confirms the table, both GSIs, PITR, TTL, and stream settings are present. No independent AWS verification was performed in this session. The local DynamoDB integration run passed all 17 §7.4 patterns; `pnpm typecheck` and `pnpm test` (59 unit tests) passed previously. No Git push was performed.
+Latest validation (2026-10-25): focused auth tests passed (21 tests), `pnpm typecheck` passed, targeted ESLint passed, and `git diff --check` passed after replay-revocation changes. The user reports that `pnpm run test:auth-live` passed against dev AWS: registration, login, refresh rotation, invalid-token rejection, consumed-token replay revocation, logout, post-logout refresh rejection, and cleanup completed with the runner's success message. This live verification is user-reported and was not independently rerun in this session. Terraform validation and the user's confirmation of the provisioned `rental-app-dev-db` table and settings are recorded above. The local DynamoDB integration run passed all 17 §7.4 patterns. No Git push was performed.
 
 ## Next recommended work
 
-1. Close P1: the user confirmed successful dev provisioning and configuration verification.
-2. Continue P2 by removing production dependence on the auth in-memory demo user/store and runtime-generated signing-key fallback; retain local/test-only fallback behavior only where it is explicitly safe and covered by tests.
-3. Once P2 auth hardening is complete, start P3 core CRUD, beginning with property CRUD, validation, ownership, and soft-delete constraints.
+1. Begin P3 with property CRUD, validation, account ownership, and soft-delete constraints.
+2. Add focused endpoint and account-isolation tests before expanding to tenant, lease, and payment CRUD.
