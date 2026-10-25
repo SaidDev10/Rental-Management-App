@@ -257,7 +257,7 @@ See section 4 for the full schema.
 |--------|----------|
 | **Service** | Amazon DynamoDB |
 | **Capacity** | On-demand (no idle cost) |
-| **Table** | Single table: `rental-app-main` |
+| **Table** | Single table: `rental-app-${stage}-db` (for example, `rental-app-dev-db` or `rental-app-prod-db`) |
 | **Indexes** | GSI1 (property/lease lookups), GSI2 (status lookups) |
 | **Streams** | Enabled — feeds `stream-aggregator` |
 | **PITR** | Enabled (35-day continuous backup) — satisfies RPO <= 5min |
@@ -318,7 +318,7 @@ See section 4 for the full schema.
 
 | Setting | Value |
 |---------|-------|
-| Table name | `rental-app-main` |
+| Table name | `rental-app-${stage}-db` |
 | Partition key | `PK` (String) |
 | Sort key | `SK` (String) |
 | Billing mode | On-demand |
@@ -439,7 +439,7 @@ Quittances must be **auto-numbered sequentially per owner** (BRD rule #10).
 ```typescript
 // Atomic increment — guaranteed unique, sequential
 const result = await dynamo.send(new UpdateItemCommand({
-  TableName: 'rental-app-main',
+  TableName: `rental-app-${stage}-db`,
   Key: { PK: `ACCOUNT#${accountId}`, SK: 'COUNTER#quittance' },
   UpdateExpression: 'ADD #n :inc',
   ExpressionAttributeNames: { '#n': 'nextNumber' },

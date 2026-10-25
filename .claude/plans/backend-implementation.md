@@ -2,7 +2,7 @@
 
 This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.claude/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
-**Overall status: P1 — Data layer in progress.** P0 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
+**Overall status: P2 — Auth in progress.** P0 and P1 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
 
 ## P0 — Foundations
 
@@ -27,17 +27,17 @@ This tracker follows the phase sequence and exit criteria in [Backend Specificat
 
 **Specification deliverable:** all item types, key builders, repositories, DynamoDB Local integration tests.
 
-**Status: In progress — local access-pattern tests pass; dev S3 backend is initialized and plan reviewed**
+**Status: Complete — user confirmed dev table, GSIs, PITR, TTL, and stream settings are provisioned**
 
 - [x] Add account-scoped key builders and shared repository operations with account/GSI key checks.
 - [x] Add account-scoped job repository operations and conditional job transitions.
 - [x] Define and implement the property domain item/repository contract used by the API.
 - [x] Remove the duplicate root-level property routes now that the property module owns the `/properties` route mount.
-- [ ] Provision the table and both GSIs through Terraform.
+- [x] Provision the table and both GSIs through Terraform.
 - [x] Run DynamoDB Local integration tests covering every §7.4 access pattern.
-- [ ] Meet the phase exit criteria: table and GSIs are provisioned; every specified access pattern is proven by a test.
+- [x] Meet the phase exit criteria: table and GSIs are provisioned; every specified access pattern is proven by a test.
 
-Progress: Terraform configuration for the table and both GSIs is implemented but has not been applied to AWS. The dev S3 backend is initialized against the approved `rental-management-terraform` bucket in `eu-north-1`; dev and prod have separate state keys and native S3 lockfiles. The local-only integration suite passes against DynamoDB Local and exercises all 17 §7.4 patterns, including GSI queries followed by `BatchGetItem`. A read-only `DescribeTable` in `eu-north-1` returned `ResourceNotFoundException` for `rental-app-main`. The fresh dev plan proposes only the creation of that table: one add, zero changes, zero destroys.
+Progress: Terraform configuration uses the stage-specific naming contract in §7.1 (`rental-app-${stage}-db`). The user confirms they applied Terraform and verified the dev table, both GSIs, PITR, TTL, and stream settings. The local-only integration suite passes against DynamoDB Local and exercises all 17 §7.4 patterns, including GSI queries followed by `BatchGetItem`. The dev and prod backends use separate state keys and native S3 lockfiles.
 
 ## P2 — Auth
 
@@ -158,10 +158,10 @@ Progress: Terraform configuration for the table and both GSIs is implemented but
 
 ## Current verification snapshot
 
-Latest validation (2026-10-24): `terraform init -input=false -backend-config backend.dev.hcl` succeeded and initialized the dev remote S3 backend. `terraform plan -input=false -var="stage=dev"` proposes `1 to add, 0 to change, 0 to destroy`: create `rental-app-main` with GSI1 (ALL), GSI2 (KEYS_ONLY), PITR, TTL, AWS-owned-key encryption, and NEW_AND_OLD_IMAGES streams; dev deletion protection is disabled. A read-only `DescribeTable` in `eu-north-1` returned `ResourceNotFoundException`. No apply was run. The local DynamoDB integration run passed all 17 §7.4 patterns; `pnpm typecheck` and `pnpm test` (59 unit tests) passed previously. No Git push was performed.
+Latest validation (2026-10-25): `terraform init -reconfigure -input=false -backend-config backend.dev.hcl`, `terraform validate`, and `terraform plan -input=false -var="stage=dev"` succeeded; the plan showed the expected `rental-app-dev-db` creation. The user subsequently applied the plan and confirms the table, both GSIs, PITR, TTL, and stream settings are present. No independent AWS verification was performed in this session. The local DynamoDB integration run passed all 17 §7.4 patterns; `pnpm typecheck` and `pnpm test` (59 unit tests) passed previously. No Git push was performed.
 
 ## Next recommended work
 
-1. Review the dev plan above and explicitly approve or decline the proposed table creation before any `terraform apply`.
-2. After an approved apply, verify the table and both GSIs in `eu-north-1`, then close the P1 provisioning item and phase exit gate.
-3. Initialize the separate prod backend and plan independently only when production deployment is requested.
+1. Close P1: the user confirmed successful dev provisioning and configuration verification.
+2. Continue P2 by removing production dependence on the auth in-memory demo user/store and runtime-generated signing-key fallback; retain local/test-only fallback behavior only where it is explicitly safe and covered by tests.
+3. Once P2 auth hardening is complete, start P3 core CRUD, beginning with property CRUD, validation, ownership, and soft-delete constraints.

@@ -223,7 +223,7 @@ Package imports are unaffected. `import { Hono } from 'hono'` is correct; subpat
 |---|---|---|---|
 | `STAGE` | yes | `prod` | `dev` \| `prod` |
 | `AWS_REGION` | yes | `eu-west-1` | Reserved by Lambda |
-| `TABLE_NAME` | yes | `rental-app-main` | |
+| `TABLE_NAME` | yes | `rental-app-${stage}-db` | Example: `rental-app-dev-db` in dev, `rental-app-prod-db` in prod |
 | `DOCUMENTS_BUCKET` | yes | `rental-app-documents-prod` | |
 | `PHOTOS_BUCKET` | yes | `rental-app-photos-prod` | |
 | `PDF_QUEUE_URL` | api, pdf | `https://sqs...` | |
@@ -489,7 +489,7 @@ Audit writes MUST NOT be able to fail the request. Wrap in try/catch and log on 
 
 | Setting | Value |
 |---|---|
-| Name | `rental-app-main` |
+| Name | `rental-app-${stage}-db` (e.g. `rental-app-dev-db` in dev) |
 | PK | `PK` (S) |
 | SK | `SK` (S) |
 | Billing | `PAY_PER_REQUEST` |
@@ -1598,7 +1598,7 @@ export async function sendWhatsApp(input: SendInput): Promise<void> {
 
 ### 11.5 `stream-aggregator`
 
-**Event source:** DynamoDB Streams on `rental-app-main`, `NEW_AND_OLD_IMAGES`, `BatchSize: 100`, `BisectBatchOnFunctionError: true`, `MaximumRetryAttempts: 3`, `DestinationConfig.OnFailure → stream-dlq`, `ParallelizationFactor: 1`.
+**Event source:** DynamoDB Streams on the active stage table (`rental-app-${stage}-db`), `NEW_AND_OLD_IMAGES`, `BatchSize: 100`, `BisectBatchOnFunctionError: true`, `MaximumRetryAttempts: 3`, `DestinationConfig.OnFailure → stream-dlq`, `ParallelizationFactor: 1`.
 
 > `ParallelizationFactor: 1` is deliberate: aggregation updates target the same `SUMMARY#<yyyy-mm>` item per account, and parallel shard processing would create hot-partition contention for no throughput benefit at this scale.
 

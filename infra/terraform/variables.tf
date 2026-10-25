@@ -15,7 +15,7 @@ variable "stage" {
 }
 
 variable "table_name" {
-  description = "DynamoDB table name consumed by the backend as TABLE_NAME."
+  description = "Base DynamoDB table name consumed by the backend as TABLE_NAME. The stage is appended as -<stage>-db."
   type        = string
   default     = "rental-app"
 }
