@@ -991,6 +991,7 @@ Signed with **RS256** using the SSM private key. Public key cached in module sco
 | PATCH | `/tenants/:id` | owner |
 | DELETE | `/tenants/:id` | owner — `409 TENANT_HAS_ACTIVE_LEASE` guard |
 | PUT | `/tenants/:id/id-document` | owner — `{ type, number, issuedAt?, expiresAt?, fileKey? }`; `number` is encrypted before write |
+| GET | `/tenants/:id/id-document` | owner — decrypts and returns the identity document |
 
 **PII handling:** `idDocument.number` MUST be encrypted with AES-256-GCM using `field-encryption-key` from SSM before it reaches DynamoDB. Stored as `v1:<iv>:<ciphertext>:<tag>` (base64). Decryption happens **only** in `tenantService.getDecryptedIdDocument()`, which is called by exactly one route (owner-only) and never by list endpoints. List responses return `idDocumentType` and `idDocumentLast4` only.
 

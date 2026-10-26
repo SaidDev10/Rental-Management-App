@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { app } from '../../src/app';
@@ -16,6 +18,12 @@ describe('backend skeleton', () => {
     const response = await app.request('http://localhost/properties/', {
       method: 'GET',
     });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('requires authentication for tenant routes', async () => {
+    const response = await app.request('http://localhost/tenants/');
 
     expect(response.status).toBe(401);
   });
@@ -149,6 +157,170 @@ describe('backend skeleton', () => {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     expect(deletedGetResponse.status).toBe(404);
+  });
+
+  it('creates, reads, updates, and soft-deletes account-owned tenants', async () => {
+    const loginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+    });
+    const { accessToken } = (await loginResponse.json()) as { accessToken: string };
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'tenant-crud-create-1',
+      'x-account-id': 'caller-controlled-account',
+    };
+    const createBody = JSON.stringify({
+      firstName: 'Mina',
+      lastName: 'Bennani',
+      email: 'mina@example.test',
+      phone: '+212600000001',
+    });
+    const createResponse = await app.request('http://localhost/tenants/', {
+      method: 'POST',
+      headers,
+      body: createBody,
+    });
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json() as {
+      data: { id: string; version: number; accountId: string; firstName: string };
+    }).data;
+    expect(created).toMatchObject({
+      accountId: 'demo-account',
+      firstName: 'Mina',
+      version: 1,
+    });
+
+    const replayResponse = await app.request('http://localhost/tenants/', {
+      method: 'POST',
+      headers,
+      body: createBody,
+    });
+    expect(replayResponse.status).toBe(201);
+    expect(await replayResponse.json()).toMatchObject({ data: { id: created.id } });
+
+    const detailResponse = await app.request(`http://localhost/tenants/${created.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'x-account-id': 'caller-controlled-account' },
+    });
+    expect(detailResponse.status).toBe(200);
+    expect(detailResponse.headers.get('ETag')).toBe('1');
+    expect(await detailResponse.json()).toMatchObject({
+      data: { id: created.id, accountId: 'demo-account', activeLeases: [] },
+    });
+
+    const updateResponse = await app.request(`http://localhost/tenants/${created.id}`, {
+      method: 'PATCH',
+      headers: { ...headers, 'If-Match': '1' },
+      body: JSON.stringify({ firstName: 'Mina Zahra' }),
+    });
+    expect(updateResponse.status).toBe(200);
+    expect(updateResponse.headers.get('ETag')).toBe('2');
+
+    const deleteResponse = await app.request(`http://localhost/tenants/${created.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}`, 'If-Match': '2' },
+    });
+    expect(deleteResponse.status).toBe(204);
+
+    const deletedGetResponse = await app.request(`http://localhost/tenants/${created.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(deletedGetResponse.status).toBe(404);
+  });
+
+  it('authenticates the property-to-tenant-to-lease flow and generates a payment schedule', async () => {
+    const loginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+    });
+    const { accessToken } = (await loginResponse.json()) as { accessToken: string };
+    const requestId = randomUUID();
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'x-account-id': 'attacker-controlled-account',
+    };
+
+    const propertyResponse = await app.request('http://localhost/properties', {
+      method: 'POST',
+      headers: { ...headers, 'Idempotency-Key': `lease-flow-property-${requestId}` },
+      body: JSON.stringify({
+        label: 'Lease flow property',
+        address: { line1: '1 Lease Flow Road', city: 'Rabat', country: 'MA' },
+        propertyType: 'apartment',
+      }),
+    });
+    expect(propertyResponse.status).toBe(201);
+    const property = (await propertyResponse.json() as { data: { id: string; accountId: string } }).data;
+
+    const tenantResponse = await app.request('http://localhost/tenants', {
+      method: 'POST',
+      headers: { ...headers, 'Idempotency-Key': `lease-flow-tenant-${requestId}` },
+      body: JSON.stringify({
+        firstName: 'Lease',
+        lastName: 'Flow',
+        email: `${requestId}@example.test`,
+        phone: '+212600000222',
+      }),
+    });
+    expect(tenantResponse.status).toBe(201);
+    const tenant = (await tenantResponse.json() as { data: { id: string; accountId: string } }).data;
+    expect(property.accountId).toBe('demo-account');
+    expect(tenant.accountId).toBe('demo-account');
+
+    const leaseResponse = await app.request('http://localhost/leases', {
+      method: 'POST',
+      headers: { ...headers, 'Idempotency-Key': `lease-flow-lease-${requestId}` },
+      body: JSON.stringify({
+        propertyId: property.id,
+        tenantIds: [tenant.id],
+        startDate: '2026-11-01',
+        endDate: '2027-10-31',
+        rentAmount: 700000,
+        chargesAmount: 50000,
+        depositAmount: 700000,
+        paymentDayOfMonth: 5,
+        billingFrequency: 'monthly',
+      }),
+    });
+    expect(leaseResponse.status).toBe(201);
+    const lease = (await leaseResponse.json() as {
+      data: { id: string; accountId: string; version: number };
+    }).data;
+    expect(lease.accountId).toBe('demo-account');
+    expect(leaseResponse.headers.get('ETag')).toBe('1');
+
+    const deletePropertyResponse = await app.request(`http://localhost/properties/${property.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}`, 'If-Match': '1' },
+    });
+    expect(deletePropertyResponse.status).toBe(409);
+    expect(await deletePropertyResponse.json()).toMatchObject({
+      error: { code: 'PROPERTY_HAS_ACTIVE_LEASE' },
+    });
+
+    const scheduleResponse = await app.request(`http://localhost/leases/${lease.id}/schedule`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(scheduleResponse.status).toBe(200);
+    const scheduleBody = await scheduleResponse.json() as { data: Array<Record<string, unknown>> };
+    expect(scheduleBody).toMatchObject({
+      data: expect.arrayContaining([
+        expect.objectContaining({ leaseId: lease.id, tenantId: tenant.id, amountDue: 750000, status: 'due' }),
+      ]),
+    });
+    expect(scheduleBody.data).toHaveLength(12);
+
+    const tenantDetailResponse = await app.request(`http://localhost/tenants/${tenant.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(tenantDetailResponse.status).toBe(200);
+    expect(await tenantDetailResponse.json()).toMatchObject({
+      data: { activeLeases: [{ id: lease.id, propertyId: property.id }] },
+    });
   });
 
   it('validates property input and requires If-Match for updates', async () => {

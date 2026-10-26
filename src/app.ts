@@ -6,7 +6,9 @@ import { AppError } from './shared/errors';
 import { readApiConfig } from './shared/config';
 import { authMiddleware, authRoutes } from './modules/auth';
 import type { AuthEnv } from './modules/auth/types';
+import { leaseRoutes } from './modules/lease';
 import { propertyRoutes } from './modules/property';
+import { tenantRoutes } from './modules/tenant';
 
 const config = readApiConfig();
 
@@ -31,8 +33,14 @@ app.get('/health', (c) => {
 
 app.use('/properties', authMiddleware);
 app.use('/properties/*', authMiddleware);
+app.use('/tenants', authMiddleware);
+app.use('/tenants/*', authMiddleware);
+app.use('/leases', authMiddleware);
+app.use('/leases/*', authMiddleware);
 app.route('/auth', authRoutes);
 app.route('/properties', propertyRoutes);
+app.route('/tenants', tenantRoutes);
+app.route('/leases', leaseRoutes);
 
 app.notFound((c) => {
   return c.json(

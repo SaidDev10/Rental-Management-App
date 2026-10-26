@@ -75,13 +75,13 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** property, tenant, lease, and payment modules plus payment schedule generation.
 
-**Status: In progress — property CRUD and §8.2 detail/photo contract implemented; tenant, lease, and payment work remains**
+**Status: In progress — property, tenant, and lease core implemented; payment status transitions remain**
 
 - [x] Implement property CRUD, validation, ownership, and soft-delete constraints.
 - [x] Complete the remaining §8.2 property contract: `activeLeaseId` on detail responses and photo presign/record endpoints.
-- [ ] Implement tenant CRUD and tenant-lease relationships.
-- [ ] Implement lease lifecycle, validation, and property/tenant constraints.
-- [ ] Implement payment schedule generation and payment status transitions.
+- [x] Implement tenant CRUD and tenant-lease relationships.
+- [x] Implement lease lifecycle, validation, and property/tenant constraints.
+- [ ] Implement payment schedule generation and payment status transitions. Lease schedule generation is implemented; payment status transitions remain.
 - [ ] Add account-isolation and domain tests for every endpoint.
 - [ ] Meet the phase exit criteria: authenticated end-to-end flow from registration through property, tenant, lease, and generated payment schedule.
 
@@ -91,6 +91,12 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - Property detail now includes `activeLeaseId`; photo uploads use account/property-scoped, 5-minute presigned PUTs with pinned content type, S3 HEAD verification, 10 MB and 20-photo limits, and conditional versioned recording. Caller-supplied photo keys are rejected by property CRUD.
 - Focused validation passed: `pnpm typecheck`, the five focused Vitest files (29 tests), targeted ESLint, and `git diff --check`.
 - Repository unit tests cover the property GSI lease lookup and conditional photo update. The live DynamoDB/S3 paths have not been exercised against AWS in this step.
+- Tenant list/create/detail/update/delete routes now enforce owner role and use verified account context, sorted GSI1 directory pagination, idempotent creation, optimistic versions, soft deletion, and active tenant-lease link lookups with batch-get retries. Identity document numbers are AES-256-GCM encrypted using the SSM `field-encryption-key`; list/detail responses expose only type and last four, and only the owner-only document route decrypts them.
+- Tenant API/auth integration, route, repository, service, and field-crypto tests passed: `pnpm vitest run --silent=true test/unit/app.test.ts test/unit/field-crypto.test.ts test/unit/tenant-repository.test.ts test/unit/tenant-routes.test.ts test/unit/tenant-service.test.ts` (32 tests). `pnpm typecheck`, targeted ESLint, and `git diff --check` passed. No live AWS/DynamoDB run was performed.
+- Added authenticated lease list/create/detail/update/terminate/renew/schedule routes, account-scoped persistence and tenant links, optimistic version checks, idempotent creation/renewal, property/tenant ownership and active-property validation, and generated monthly/quarterly payment schedules.
+- Lease updates synchronize pending schedule entries without overwriting completed payments; termination cancels future due entries, and renewal atomically expires the predecessor and creates a successor. Local development mode now mirrors tenant/property lease links for detail responses and active-lease deletion guards.
+- Lease service validation covers date range, one-year maximum term, unique tenants, amounts, payment terms, and indexation. A regression test verifies that changing terms after lease start updates pending schedule amounts.
+- Focused validation passed: `pnpm typecheck`; `pnpm vitest run --silent=true test/unit/app.test.ts test/unit/lease-service.test.ts test/unit/lease-routes.test.ts test/unit/lease-repository.test.ts test/unit/property-service.test.ts test/unit/property-repository.test.ts` (36 tests); targeted ESLint; and `git diff --check` plus `git diff --cached --check`. No live AWS/DynamoDB run was performed.
 
 ## P4 — Async
 
@@ -170,9 +176,9 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 ## Current verification snapshot
 
-Latest validation (2026-10-26): property detail/photo changes passed `pnpm typecheck`, 29 focused tests, targeted ESLint, and `git diff --check`. Focused auth tests previously passed (21 tests), and the user reports `pnpm run test:auth-live` passed against dev AWS; that live verification was not independently rerun in this session. Terraform validation and the user's confirmation of the provisioned `rental-app-dev-db` table and settings are recorded above. The local DynamoDB integration run passed all 17 §7.4 patterns. No Git push was performed.
+Latest validation (2026-10-26): tenant CRUD and encryption changes passed `pnpm typecheck`, 32 focused tests, targeted ESLint, and `git diff --check`; property detail/photo changes also passed their earlier 29-test focused validation. Focused auth tests previously passed (21 tests), and the user reports `pnpm run test:auth-live` passed against dev AWS; that live verification was not independently rerun in this session. Terraform validation and the user's confirmation of the provisioned `rental-app-dev-db` table and settings are recorded above. The local DynamoDB integration run passed all 17 §7.4 patterns. No Git push was performed.
 
 ## Next recommended work
 
-1. Implement tenant CRUD and tenant-lease relationships.
-2. Continue P3 with lease lifecycle, validation, property/tenant constraints, and payment schedule generation.
+1. Implement payment status transitions and payment API/repository coverage; lease schedule generation and the authenticated property → tenant → lease → schedule flow are now implemented.
+2. Complete account-isolation and domain tests for every endpoint, then verify the P3 exit criteria.

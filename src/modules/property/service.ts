@@ -8,6 +8,7 @@ import { PROPERTY_PHOTO_LIMIT, type CreatePropertyInput, type Property, type Pro
 
 const localProperties = new Map<string, Map<string, PropertyRecord>>();
 const localIdempotencyKeys = new Map<string, Map<string, { requestBody: string; propertyId: string }>>();
+const localLeases = new Map<string, Map<string, Map<string, 'draft' | 'active' | 'terminated' | 'expired'>>>();
 
 const getLocalProperties = (accountId: string): Map<string, PropertyRecord> => {
   let properties = localProperties.get(accountId);
@@ -142,11 +143,13 @@ const createLocalRepository = (accountId: string): PropertyRepository => {
 
       return updated;
     },
-    async hasActiveLease() {
-      return false;
+    async hasActiveLease(propertyId) {
+      return [...(localLeases.get(accountId)?.get(propertyId)?.values() ?? [])].includes('active');
     },
-    async findActiveLeaseId() {
-      return undefined;
+    async findActiveLeaseId(propertyId) {
+      const leases = localLeases.get(accountId)?.get(propertyId);
+
+      return [...(leases ?? [])].find(([, status]) => status === 'active')?.[0];
     },
     async addPhoto(propertyId, expectedVersion, photoKey) {
       const current = properties.get(propertyId);
@@ -213,6 +216,39 @@ const toProperty = (record: PropertyRecord): Property => ({
 });
 
 export const propertyService = {
+  recordLocalLeaseLink(
+    accountId: string,
+    lease: { id: string; propertyId: string; status: 'draft' | 'active' | 'terminated' | 'expired' },
+  ): void {
+    if (!isLocalAuthMode()) {
+      return;
+    }
+    const properties = localLeases.get(accountId) ?? new Map();
+    const leases = properties.get(lease.propertyId) ?? new Map();
+    leases.set(lease.id, lease.status);
+    properties.set(lease.propertyId, leases);
+    localLeases.set(accountId, properties);
+  },
+
+  updateLocalLeaseStatus(
+    accountId: string,
+    leaseId: string,
+    status: 'draft' | 'active' | 'terminated' | 'expired',
+  ): void {
+    if (!isLocalAuthMode()) {
+      return;
+    }
+    const properties = localLeases.get(accountId);
+    if (!properties) {
+      return;
+    }
+    for (const leases of properties.values()) {
+      if (leases.has(leaseId)) {
+        leases.set(leaseId, status);
+      }
+    }
+  },
+
   async list(
     accountId: string,
     options: PropertyListOptions,
