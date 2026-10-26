@@ -16,6 +16,8 @@ import {
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { createPaymentRepository } from '../../src/modules/payment/repository';
+
 const endpoint = process.env.DYNAMODB_ENDPOINT;
 const endpointUrl = endpoint ? new URL(endpoint) : undefined;
 const isLocalEndpoint =
@@ -178,6 +180,14 @@ integrationSuite('DynamoDB Local access patterns', () => {
       }),
       accountItem('PAYMENT#payment-late', {
         entityType: 'Payment',
+        id: 'payment-late',
+        leaseId: 'lease-1',
+        propertyId: 'property-1',
+        tenantId: 'tenant-1',
+        status: 'late',
+        amountDue: 100000,
+        amountPaid: 0,
+        version: 1,
         GSI1PK: leasePk,
         GSI1SK: 'PAYMENT#2026-01-01#payment-late',
         GSI2PK: lateStatusPk,
@@ -185,6 +195,14 @@ integrationSuite('DynamoDB Local access patterns', () => {
       }),
       accountItem('PAYMENT#payment-due', {
         entityType: 'Payment',
+        id: 'payment-due',
+        leaseId: 'lease-1',
+        propertyId: 'property-1',
+        tenantId: 'tenant-1',
+        status: 'due',
+        amountDue: 100000,
+        amountPaid: 0,
+        version: 1,
         GSI1PK: leasePk,
         GSI1SK: 'PAYMENT#2026-02-01#payment-due',
         GSI2PK: dueStatusPk,
@@ -388,5 +406,53 @@ integrationSuite('DynamoDB Local access patterns', () => {
       `${accountPk}#STATUS#queued`,
     );
     expect(queuedJobs.map((item) => item.SK)).toEqual(['JOB#job-1']);
+  });
+
+  it('conditionally records and cancels a payment while updating its status index', async () => {
+    const previousUseDynamoAuth = process.env.USE_DYNAMO_AUTH;
+    process.env.USE_DYNAMO_AUTH = 'true';
+    try {
+      const repository = createPaymentRepository({
+        accountId,
+        client,
+        tableName,
+      });
+      const partial = await repository.recordPaid(
+        'payment-due',
+        1,
+        {
+          amountPaid: 25000,
+          paidAt: '2026-02-01T12:00:00.000Z',
+          paymentMethod: 'bank_transfer',
+        },
+        'partial',
+      );
+      expect(partial).toMatchObject({ status: 'partial', amountPaid: 25000, version: 2 });
+      expect(partial.GSI2PK).toBe(`${accountPk}#STATUS#partial`);
+
+      const cancelled = await repository.cancel('payment-due', partial.version);
+      expect(cancelled).toMatchObject({ status: 'cancelled', version: 3 });
+      expect(cancelled.GSI2PK).toBe(`${accountPk}#STATUS#cancelled`);
+
+      const stored = await client.send(
+        new GetCommand({
+          TableName: tableName,
+          Key: { PK: accountPk, SK: 'PAYMENT#payment-due' },
+          ConsistentRead: true,
+        }),
+      );
+      expect(stored.Item).toMatchObject({
+        status: 'cancelled',
+        amountPaid: 25000,
+        GSI2PK: `${accountPk}#STATUS#cancelled`,
+        version: 3,
+      });
+    } finally {
+      if (previousUseDynamoAuth === undefined) {
+        delete process.env.USE_DYNAMO_AUTH;
+      } else {
+        process.env.USE_DYNAMO_AUTH = previousUseDynamoAuth;
+      }
+    }
   });
 });

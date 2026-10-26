@@ -4,12 +4,12 @@ import { AppError, NotFoundError } from '../../shared/errors';
 import { decodeCursor } from '../../shared/db/pagination';
 import { propertyService } from '../property';
 import { tenantService } from '../tenant';
+import { localPaymentStoreFor } from '../payment/local-store';
 import { createLeaseRepository, type LeaseListOptions, type LeaseRecord, type LeaseRepository } from './repository';
 import { addLeaseDays, addLeaseMonths, generatePaymentSchedule, validateLeaseInput } from './validators';
 import type { CreateLeaseInput, Lease, LeaseDetail, LeasePayment, UpdateLeaseInput } from './types';
 
 const localLeases = new Map<string, Map<string, LeaseRecord>>();
-const localPayments = new Map<string, Map<string, LeasePayment>>();
 const localIdempotency = new Map<string, Map<string, { requestHash: string; leaseId: string }>>();
 
 const localMode = (): boolean =>
@@ -19,10 +19,9 @@ const requestHashFor = (input: CreateLeaseInput): string => JSON.stringify(input
 
 const localRepositoryFor = (accountId: string): LeaseRepository => {
   const leases = localLeases.get(accountId) ?? new Map<string, LeaseRecord>();
-  const payments = localPayments.get(accountId) ?? new Map<string, LeasePayment>();
+  const payments = localPaymentStoreFor(accountId);
   const idempotency = localIdempotency.get(accountId) ?? new Map<string, { requestHash: string; leaseId: string }>();
   localLeases.set(accountId, leases);
-  localPayments.set(accountId, payments);
   localIdempotency.set(accountId, idempotency);
 
   const generateRecord = (input: CreateLeaseInput, id: string, idempotencyKey: string): LeaseRecord => {

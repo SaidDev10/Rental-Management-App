@@ -7,6 +7,7 @@ import { readApiConfig } from './shared/config';
 import { authMiddleware, authRoutes } from './modules/auth';
 import type { AuthEnv } from './modules/auth/types';
 import { leaseRoutes } from './modules/lease';
+import { paymentRoutes } from './modules/payment';
 import { propertyRoutes } from './modules/property';
 import { tenantRoutes } from './modules/tenant';
 
@@ -37,10 +38,13 @@ app.use('/tenants', authMiddleware);
 app.use('/tenants/*', authMiddleware);
 app.use('/leases', authMiddleware);
 app.use('/leases/*', authMiddleware);
+app.use('/payments', authMiddleware);
+app.use('/payments/*', authMiddleware);
 app.route('/auth', authRoutes);
 app.route('/properties', propertyRoutes);
 app.route('/tenants', tenantRoutes);
 app.route('/leases', leaseRoutes);
+app.route('/payments', paymentRoutes);
 
 app.notFound((c) => {
   return c.json(

@@ -28,6 +28,12 @@ describe('backend skeleton', () => {
     expect(response.status).toBe(401);
   });
 
+  it('requires authentication for payment routes', async () => {
+    const response = await app.request('http://localhost/payments/');
+
+    expect(response.status).toBe(401);
+  });
+
   it('returns 200 for a valid login payload', async () => {
     const response = await app.request('http://localhost/auth/login', {
       method: 'POST',
@@ -313,6 +319,36 @@ describe('backend skeleton', () => {
       ]),
     });
     expect(scheduleBody.data).toHaveLength(12);
+
+    const paymentListResponse = await app.request(`http://localhost/payments?leaseId=${lease.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(paymentListResponse.status).toBe(200);
+    const paymentList = await paymentListResponse.json() as {
+      data: Array<{ id: string; amountDue: number; version: number }>;
+    };
+    expect(paymentList.data).toHaveLength(12);
+    const firstPayment = paymentList.data[0]!;
+    const partialPaymentResponse = await app.request(
+      `http://localhost/payments/${firstPayment.id}/mark-paid`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'If-Match': String(firstPayment.version),
+        },
+        body: JSON.stringify({
+          paidAt: '2026-11-05T12:00:00.000Z',
+          paymentMethod: 'bank_transfer',
+          amountPaid: 250000,
+        }),
+      },
+    );
+    expect(partialPaymentResponse.status).toBe(200);
+    expect(await partialPaymentResponse.json()).toMatchObject({
+      data: { status: 'partial', amountPaid: 250000, version: firstPayment.version + 1 },
+    });
 
     const tenantDetailResponse = await app.request(`http://localhost/tenants/${tenant.id}`, {
       headers: { Authorization: `Bearer ${accessToken}` },

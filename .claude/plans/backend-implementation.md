@@ -75,13 +75,13 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** property, tenant, lease, and payment modules plus payment schedule generation.
 
-**Status: In progress — property, tenant, and lease core implemented; payment status transitions remain**
+**Status: In progress — property, tenant, lease, and core payment flows implemented; P3 isolation and exit tests remain**
 
 - [x] Implement property CRUD, validation, ownership, and soft-delete constraints.
 - [x] Complete the remaining §8.2 property contract: `activeLeaseId` on detail responses and photo presign/record endpoints.
 - [x] Implement tenant CRUD and tenant-lease relationships.
 - [x] Implement lease lifecycle, validation, and property/tenant constraints.
-- [ ] Implement payment schedule generation and payment status transitions. Lease schedule generation is implemented; payment status transitions remain.
+- [x] Implement payment schedule generation and core payment status transitions.
 - [ ] Add account-isolation and domain tests for every endpoint.
 - [ ] Meet the phase exit criteria: authenticated end-to-end flow from registration through property, tenant, lease, and generated payment schedule.
 
@@ -97,6 +97,10 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - Lease updates synchronize pending schedule entries without overwriting completed payments; termination cancels future due entries, and renewal atomically expires the predecessor and creates a successor. Local development mode now mirrors tenant/property lease links for detail responses and active-lease deletion guards.
 - Lease service validation covers date range, one-year maximum term, unique tenants, amounts, payment terms, and indexation. A regression test verifies that changing terms after lease start updates pending schedule amounts.
 - Focused validation passed: `pnpm typecheck`; `pnpm vitest run --silent=true test/unit/app.test.ts test/unit/lease-service.test.ts test/unit/lease-routes.test.ts test/unit/lease-repository.test.ts test/unit/property-service.test.ts test/unit/property-repository.test.ts` (36 tests); targeted ESLint; and `git diff --check` plus `git diff --cached --check`. No live AWS/DynamoDB run was performed.
+- Added owner-authenticated `/payments` list, overdue, manual-create, detail, update, mark-paid, and cancel routes. Manual creation verifies the lease/account context and is idempotent; optimistic versions protect edits and status changes.
+- Payment transitions now enforce monotonic partial/full amounts, reject overpayment, update GSI2 status keys, guard paid-payment cancellation, and provide conditional processing of past-due due/partial entries as late. The local payment store is shared with lease schedule generation so local API reads and updates act on generated payments.
+- Added repository, service, route, account-isolation, and authenticated property→tenant→lease→payment flow coverage. The payment quittance endpoint remains with the P4 job-producer item; the scheduled EventBridge invocation of the overdue processor is not wired yet.
+- Focused validation passed: `pnpm typecheck`; `pnpm vitest run --silent=true test/unit/app.test.ts test/unit/lease-service.test.ts test/unit/payment-service.test.ts test/unit/payment-routes.test.ts test/unit/payment-repository.test.ts test/integration/dynamodb-access-patterns.test.ts` (35 tests passed, 2 DynamoDB Local tests skipped because no local endpoint was configured); targeted ESLint; and staged/unstaged `git diff --check`. No live AWS/DynamoDB run was performed.
 
 ## P4 — Async
 
@@ -176,9 +180,9 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 ## Current verification snapshot
 
-Latest validation (2026-10-26): tenant CRUD and encryption changes passed `pnpm typecheck`, 32 focused tests, targeted ESLint, and `git diff --check`; property detail/photo changes also passed their earlier 29-test focused validation. Focused auth tests previously passed (21 tests), and the user reports `pnpm run test:auth-live` passed against dev AWS; that live verification was not independently rerun in this session. Terraform validation and the user's confirmation of the provisioned `rental-app-dev-db` table and settings are recorded above. The local DynamoDB integration run passed all 17 §7.4 patterns. No Git push was performed.
+Latest validation (2026-10-26): payment API and transition changes passed `pnpm typecheck`, 35 focused tests, targeted ESLint, and staged/unstaged `git diff --check`; the two DynamoDB Local tests were skipped because no local endpoint was configured. Lease and payment focused checks passed in the same run. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above; live AWS validation was not performed for this payment work. No Git push was performed.
 
 ## Next recommended work
 
-1. Implement payment status transitions and payment API/repository coverage; lease schedule generation and the authenticated property → tenant → lease → schedule flow are now implemented.
-2. Complete account-isolation and domain tests for every endpoint, then verify the P3 exit criteria.
+1. Complete account-isolation and domain tests for every payment endpoint, and exercise the full registration → property → tenant → lease → schedule flow.
+2. Wire the overdue-payment processor to its scheduled EventBridge invocation; implement the payment quittance job producer under P4.
