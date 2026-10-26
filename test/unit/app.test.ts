@@ -52,8 +52,243 @@ describe('backend skeleton', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      data: [{ id: 'prop_1', accountId: 'demo-account', title: 'Apartment Medina' }],
+      data: [{ id: 'prop_1', accountId: 'demo-account', label: 'Apartment Medina' }],
     });
+  });
+
+  it('creates, reads, updates, and soft-deletes account-owned properties', async () => {
+    const loginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+    });
+    const { accessToken } = (await loginResponse.json()) as { accessToken: string };
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'property-crud-create-1',
+    };
+    const createBody = JSON.stringify({
+      label: 'CRUD Test House',
+      address: { line1: '42 Test Street', city: 'Rabat', country: 'MA' },
+      propertyType: 'house',
+    });
+    const createResponse = await app.request('http://localhost/properties/', {
+      method: 'POST',
+      headers,
+      body: createBody,
+    });
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json() as {
+      data: { id: string; version: number; accountId: string; label: string };
+    }).data;
+    expect(created).toMatchObject({
+      accountId: 'demo-account',
+      label: 'CRUD Test House',
+      version: 1,
+    });
+
+    const idempotentCreateResponse = await app.request('http://localhost/properties/', {
+      method: 'POST',
+      headers,
+      body: createBody,
+    });
+    expect(idempotentCreateResponse.status).toBe(201);
+    expect(await idempotentCreateResponse.json()).toMatchObject({
+      data: { id: created.id },
+    });
+
+    const reusedKeyResponse = await app.request('http://localhost/properties/', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        label: 'Different House',
+        address: { line1: '42 Test Street', city: 'Rabat', country: 'MA' },
+        propertyType: 'house',
+      }),
+    });
+    expect(reusedKeyResponse.status).toBe(409);
+    expect(await reusedKeyResponse.json()).toMatchObject({
+      error: { code: 'IDEMPOTENCY_KEY_REUSED' },
+    });
+
+    const getResponse = await app.request(`http://localhost/properties/${created.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(getResponse.status).toBe(200);
+    expect(getResponse.headers.get('ETag')).toBe('1');
+
+    const updateResponse = await app.request(`http://localhost/properties/${created.id}`, {
+      method: 'PATCH',
+      headers: { ...headers, 'If-Match': '1' },
+      body: JSON.stringify({ label: 'Updated Test House' }),
+    });
+    expect(updateResponse.status).toBe(200);
+    expect(updateResponse.headers.get('ETag')).toBe('2');
+    expect(await updateResponse.json()).toMatchObject({
+      data: { label: 'Updated Test House', version: 2 },
+    });
+
+    const staleUpdateResponse = await app.request(`http://localhost/properties/${created.id}`, {
+      method: 'PATCH',
+      headers: { ...headers, 'If-Match': '1' },
+      body: JSON.stringify({ label: 'Stale Update' }),
+    });
+    expect(staleUpdateResponse.status).toBe(409);
+    expect(await staleUpdateResponse.json()).toMatchObject({
+      error: { code: 'CONFLICT_VERSION_MISMATCH' },
+    });
+
+    const deleteResponse = await app.request(`http://localhost/properties/${created.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}`, 'If-Match': '2' },
+    });
+    expect(deleteResponse.status).toBe(204);
+
+    const deletedGetResponse = await app.request(`http://localhost/properties/${created.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(deletedGetResponse.status).toBe(404);
+  });
+
+  it('validates property input and requires If-Match for updates', async () => {
+    const loginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+    });
+    const { accessToken } = (await loginResponse.json()) as { accessToken: string };
+    const response = await app.request('http://localhost/properties/', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': 'property-isolation-create-1',
+      },
+      body: JSON.stringify({
+        label: 'X',
+        address: { line1: '', city: 'Rabat', country: 'US' },
+        propertyType: 'house',
+      }),
+    });
+    expect(response.status).toBe(400);
+
+    const missingIdempotencyKeyResponse = await app.request('http://localhost/properties/', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        label: 'Valid House',
+        address: { line1: '1 Valid Road', city: 'Rabat', country: 'MA' },
+        propertyType: 'house',
+      }),
+    });
+    expect(missingIdempotencyKeyResponse.status).toBe(400);
+    expect(await missingIdempotencyKeyResponse.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR' },
+    });
+
+    const updateResponse = await app.request('http://localhost/properties/prop_1', {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'Missing version' }),
+    });
+    expect(updateResponse.status).toBe(428);
+    expect(await updateResponse.json()).toMatchObject({
+      error: { code: 'PRECONDITION_REQUIRED' },
+    });
+  });
+
+  it('paginates properties and rejects malformed cursors', async () => {
+    const loginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+    });
+    const { accessToken } = (await loginResponse.json()) as { accessToken: string };
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    };
+
+    for (const [key, label] of [
+      ['property-page-create-1', 'Page House One'],
+      ['property-page-create-2', 'Page House Two'],
+    ] as const) {
+      const createResponse = await app.request('http://localhost/properties', {
+        method: 'POST',
+        headers: { ...headers, 'Idempotency-Key': key },
+        body: JSON.stringify({
+          label,
+          address: { line1: '1 Page Street', city: 'Rabat', country: 'MA' },
+          propertyType: 'house',
+        }),
+      });
+      expect(createResponse.status).toBe(201);
+    }
+
+    const firstPageResponse = await app.request('http://localhost/properties?limit=1', { headers });
+    expect(firstPageResponse.status).toBe(200);
+    const firstPage = (await firstPageResponse.json()) as {
+      data: Array<{ id: string }>;
+      nextCursor: string | null;
+    };
+    expect(firstPage.data).toHaveLength(1);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+
+    const nextPageResponse = await app.request(
+      `http://localhost/properties?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor ?? '')}`,
+      { headers },
+    );
+    const nextPage = (await nextPageResponse.json()) as { data: Array<{ id: string }> };
+    expect(nextPageResponse.status).toBe(200);
+    expect(nextPage.data[0]?.id).not.toBe(firstPage.data[0]?.id);
+
+    const malformedCursorResponse = await app.request(
+      'http://localhost/properties?cursor=not-a-cursor',
+      { headers },
+    );
+    expect(malformedCursorResponse.status).toBe(400);
+    expect(await malformedCursorResponse.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR' },
+    });
+  });
+
+  it('does not expose another account’s property by identifier', async () => {
+    const ownerLogin = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+    });
+    const { accessToken } = (await ownerLogin.json()) as { accessToken: string };
+    const createResponse = await app.request('http://localhost/properties', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': 'property-isolation-create-1',
+      },
+      body: JSON.stringify({
+        label: 'Private Property',
+        address: { line1: '1 Private Road', city: 'Fes', country: 'MA' },
+        propertyType: 'house',
+      }),
+    });
+    const { data: property } = (await createResponse.json()) as { data: { id: string } };
+    const otherAccountToken = await signAccessToken({
+      userId: 'user_other',
+      accountId: 'other-account',
+      email: 'other@example.test',
+      role: 'owner',
+      sessionId: 'session_other',
+    });
+
+    const response = await app.request(`http://localhost/properties/${property.id}`, {
+      headers: { Authorization: `Bearer ${otherAccountToken}` },
+    });
+    expect(response.status).toBe(404);
   });
 
   it('returns the caller identity from the verified bearer token on /auth/me', async () => {

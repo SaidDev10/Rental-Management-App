@@ -10,7 +10,7 @@ import { propertyRoutes } from './modules/property';
 
 const config = readApiConfig();
 
-export const app = new Hono<AuthEnv>();
+export const app = new Hono<AuthEnv>({ strict: false });
 
 app.use('*', logger());
 app.use(
@@ -29,6 +29,7 @@ app.get('/health', (c) => {
   });
 });
 
+app.use('/properties', authMiddleware);
 app.use('/properties/*', authMiddleware);
 app.route('/auth', authRoutes);
 app.route('/properties', propertyRoutes);

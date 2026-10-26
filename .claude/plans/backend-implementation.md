@@ -2,7 +2,7 @@
 
 This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.claude/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
-**Overall status: P2 — Auth complete; P3 — Core CRUD is next.** P0, P1, and P2 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
+**Overall status: P2 — Auth complete; P3 — Core CRUD in progress.** P0, P1, and P2 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
 
 ## P0 — Foundations
 
@@ -75,14 +75,22 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** property, tenant, lease, and payment modules plus payment schedule generation.
 
-**Status: Not started — route skeletons are not domain CRUD**
+**Status: In progress — property CRUD and §8.2 detail/photo contract implemented; tenant, lease, and payment work remains**
 
-- [ ] Implement property CRUD, validation, ownership, and soft-delete constraints.
+- [x] Implement property CRUD, validation, ownership, and soft-delete constraints.
+- [x] Complete the remaining §8.2 property contract: `activeLeaseId` on detail responses and photo presign/record endpoints.
 - [ ] Implement tenant CRUD and tenant-lease relationships.
 - [ ] Implement lease lifecycle, validation, and property/tenant constraints.
 - [ ] Implement payment schedule generation and payment status transitions.
 - [ ] Add account-isolation and domain tests for every endpoint.
 - [ ] Meet the phase exit criteria: authenticated end-to-end flow from registration through property, tenant, lease, and generated payment schedule.
+
+### Verification snapshot
+- Implemented authenticated property list/get/create/update/delete APIs with schema validation, account-scoped repository access, idempotent creation, optimistic version checks, soft deletion, and active-lease deletion protection.
+- Added status/label filtering, bounded cursor pagination, and support for both `/properties` and `/properties/`.
+- Property detail now includes `activeLeaseId`; photo uploads use account/property-scoped, 5-minute presigned PUTs with pinned content type, S3 HEAD verification, 10 MB and 20-photo limits, and conditional versioned recording. Caller-supplied photo keys are rejected by property CRUD.
+- Focused validation passed: `pnpm typecheck`, the five focused Vitest files (29 tests), targeted ESLint, and `git diff --check`.
+- Repository unit tests cover the property GSI lease lookup and conditional photo update. The live DynamoDB/S3 paths have not been exercised against AWS in this step.
 
 ## P4 — Async
 
@@ -162,9 +170,9 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 ## Current verification snapshot
 
-Latest validation (2026-10-25): focused auth tests passed (21 tests), `pnpm typecheck` passed, targeted ESLint passed, and `git diff --check` passed after replay-revocation changes. The user reports that `pnpm run test:auth-live` passed against dev AWS: registration, login, refresh rotation, invalid-token rejection, consumed-token replay revocation, logout, post-logout refresh rejection, and cleanup completed with the runner's success message. This live verification is user-reported and was not independently rerun in this session. Terraform validation and the user's confirmation of the provisioned `rental-app-dev-db` table and settings are recorded above. The local DynamoDB integration run passed all 17 §7.4 patterns. No Git push was performed.
+Latest validation (2026-10-26): property detail/photo changes passed `pnpm typecheck`, 29 focused tests, targeted ESLint, and `git diff --check`. Focused auth tests previously passed (21 tests), and the user reports `pnpm run test:auth-live` passed against dev AWS; that live verification was not independently rerun in this session. Terraform validation and the user's confirmation of the provisioned `rental-app-dev-db` table and settings are recorded above. The local DynamoDB integration run passed all 17 §7.4 patterns. No Git push was performed.
 
 ## Next recommended work
 
-1. Begin P3 with property CRUD, validation, account ownership, and soft-delete constraints.
-2. Add focused endpoint and account-isolation tests before expanding to tenant, lease, and payment CRUD.
+1. Implement tenant CRUD and tenant-lease relationships.
+2. Continue P3 with lease lifecycle, validation, property/tenant constraints, and payment schedule generation.
