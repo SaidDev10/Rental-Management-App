@@ -1,6 +1,6 @@
 # Backend Implementation Status
 
-This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.claude/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
+This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.github/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
 **Overall status: P2 — Auth complete; P3 — Core CRUD complete; P4 — Async in progress.** P0 through P3 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
 

@@ -24,7 +24,7 @@ treat an unasked question as a future bug.
 
 ## 2. Write the plan
 
-Save to `.claude/plans/<descriptive-name>.md` in the **repository root** (create `plans/`
+Save to `.github/plans/<descriptive-name>.md` in the **repository root** (create `plans/`
 if needed). Use this self-documenting template:
 
 """
