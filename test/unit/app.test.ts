@@ -237,13 +237,31 @@ describe('backend skeleton', () => {
   });
 
   it('authenticates the property-to-tenant-to-lease flow and generates a payment schedule', async () => {
+    const requestId = randomUUID();
+    const email = `lease-flow-${requestId}@example.test`;
+    const registrationResponse = await app.request('http://localhost/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountName: `Lease Flow ${requestId}`,
+        ownerName: 'Lease Flow Owner',
+        email,
+        password: 'supersecret123',
+        phone: '+212600000222',
+        locale: 'en',
+      }),
+    });
+    expect(registrationResponse.status).toBe(201);
+    const registration = await registrationResponse.json() as {
+      account: { id: string };
+    };
+
     const loginResponse = await app.request('http://localhost/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'owner@example.com', password: 'supersecret123' }),
+      body: JSON.stringify({ email, password: 'supersecret123' }),
     });
     const { accessToken } = (await loginResponse.json()) as { accessToken: string };
-    const requestId = randomUUID();
     const headers = {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
@@ -274,8 +292,8 @@ describe('backend skeleton', () => {
     });
     expect(tenantResponse.status).toBe(201);
     const tenant = (await tenantResponse.json() as { data: { id: string; accountId: string } }).data;
-    expect(property.accountId).toBe('demo-account');
-    expect(tenant.accountId).toBe('demo-account');
+    expect(property.accountId).toBe(registration.account.id);
+    expect(tenant.accountId).toBe(registration.account.id);
 
     const leaseResponse = await app.request('http://localhost/leases', {
       method: 'POST',
@@ -296,7 +314,7 @@ describe('backend skeleton', () => {
     const lease = (await leaseResponse.json() as {
       data: { id: string; accountId: string; version: number };
     }).data;
-    expect(lease.accountId).toBe('demo-account');
+    expect(lease.accountId).toBe(registration.account.id);
     expect(leaseResponse.headers.get('ETag')).toBe('1');
 
     const deletePropertyResponse = await app.request(`http://localhost/properties/${property.id}`, {
@@ -357,6 +375,80 @@ describe('backend skeleton', () => {
     expect(await tenantDetailResponse.json()).toMatchObject({
       data: { activeLeases: [{ id: lease.id, propertyId: property.id }] },
     });
+
+    const secondEmail = `lease-flow-other-${requestId}@example.test`;
+    const secondRegistrationResponse = await app.request('http://localhost/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountName: `Other Lease Flow ${requestId}`,
+        ownerName: 'Other Lease Flow Owner',
+        email: secondEmail,
+        password: 'supersecret123',
+        phone: '+212600000223',
+      }),
+    });
+    expect(secondRegistrationResponse.status).toBe(201);
+    const secondLoginResponse = await app.request('http://localhost/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: secondEmail, password: 'supersecret123' }),
+    });
+    const { accessToken: otherAccessToken } = await secondLoginResponse.json() as { accessToken: string };
+    const otherHeaders = {
+      Authorization: `Bearer ${otherAccessToken}`,
+      'Content-Type': 'application/json',
+      'If-Match': String(firstPayment.version),
+    };
+
+    const isolatedListResponse = await app.request(`http://localhost/payments?leaseId=${lease.id}`, {
+      headers: { Authorization: `Bearer ${otherAccessToken}` },
+    });
+    expect(isolatedListResponse.status).toBe(200);
+    expect(await isolatedListResponse.json()).toMatchObject({ data: [] });
+    const isolatedOverdueResponse = await app.request('http://localhost/payments/overdue', {
+      headers: { Authorization: `Bearer ${otherAccessToken}` },
+    });
+    expect(isolatedOverdueResponse.status).toBe(200);
+    expect(await isolatedOverdueResponse.json()).toMatchObject({ data: [] });
+
+    for (const [url, init] of [
+      [`http://localhost/payments/${firstPayment.id}`, { headers: otherHeaders }],
+      [`http://localhost/payments/${firstPayment.id}`, {
+        method: 'PATCH',
+        headers: otherHeaders,
+        body: JSON.stringify({ amountDue: 800000 }),
+      }],
+      [`http://localhost/payments/${firstPayment.id}/mark-paid`, {
+        method: 'POST',
+        headers: otherHeaders,
+        body: JSON.stringify({
+          paidAt: '2026-11-05T12:00:00.000Z',
+          paymentMethod: 'cash',
+          amountPaid: 750000,
+        }),
+      }],
+      [`http://localhost/payments/${firstPayment.id}/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${otherAccessToken}`, 'If-Match': String(firstPayment.version) },
+      }],
+    ] as const) {
+      const response = await app.request(url, init);
+      expect(response.status).toBe(404);
+    }
+
+    const isolatedCreateResponse = await app.request('http://localhost/payments', {
+      method: 'POST',
+      headers: { ...otherHeaders, 'Idempotency-Key': `isolated-payment-${requestId}` },
+      body: JSON.stringify({
+        leaseId: lease.id,
+        periodStart: '2026-11-01',
+        periodEnd: '2026-11-30',
+        dueDate: '2026-11-05',
+        amountDue: 750000,
+      }),
+    });
+    expect(isolatedCreateResponse.status).toBe(404);
   });
 
   it('validates property input and requires If-Match for updates', async () => {

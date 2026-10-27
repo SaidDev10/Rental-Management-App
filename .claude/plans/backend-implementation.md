@@ -2,7 +2,7 @@
 
 This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.claude/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
-**Overall status: P2 — Auth complete; P3 — Core CRUD in progress.** P0, P1, and P2 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
+**Overall status: P2 — Auth complete; P3 — Core CRUD complete; P4 — Async in progress.** P0 through P3 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
 
 ## P0 — Foundations
 
@@ -75,15 +75,15 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** property, tenant, lease, and payment modules plus payment schedule generation.
 
-**Status: In progress — property, tenant, lease, and core payment flows implemented; P3 isolation and exit tests remain**
+**Status: Complete — property, tenant, lease, and payment flows implemented and verified**
 
 - [x] Implement property CRUD, validation, ownership, and soft-delete constraints.
 - [x] Complete the remaining §8.2 property contract: `activeLeaseId` on detail responses and photo presign/record endpoints.
 - [x] Implement tenant CRUD and tenant-lease relationships.
 - [x] Implement lease lifecycle, validation, and property/tenant constraints.
 - [x] Implement payment schedule generation and core payment status transitions.
-- [ ] Add account-isolation and domain tests for every endpoint.
-- [ ] Meet the phase exit criteria: authenticated end-to-end flow from registration through property, tenant, lease, and generated payment schedule.
+- [x] Add account-isolation and domain tests for every endpoint.
+- [x] Meet the phase exit criteria: authenticated end-to-end flow from registration through property, tenant, lease, and generated payment schedule.
 
 ### Verification snapshot
 - Implemented authenticated property list/get/create/update/delete APIs with schema validation, account-scoped repository access, idempotent creation, optimistic version checks, soft deletion, and active-lease deletion protection.
@@ -101,6 +101,8 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - Payment transitions now enforce monotonic partial/full amounts, reject overpayment, update GSI2 status keys, guard paid-payment cancellation, and provide conditional processing of past-due due/partial entries as late. The local payment store is shared with lease schedule generation so local API reads and updates act on generated payments.
 - Added repository, service, route, account-isolation, and authenticated property→tenant→lease→payment flow coverage. The payment quittance endpoint remains with the P4 job-producer item; the scheduled EventBridge invocation of the overdue processor is not wired yet.
 - Focused validation passed: `pnpm typecheck`; `pnpm vitest run --silent=true test/unit/app.test.ts test/unit/lease-service.test.ts test/unit/payment-service.test.ts test/unit/payment-routes.test.ts test/unit/payment-repository.test.ts test/integration/dynamodb-access-patterns.test.ts` (35 tests passed, 2 DynamoDB Local tests skipped because no local endpoint was configured); targeted ESLint; and staged/unstaged `git diff --check`. No live AWS/DynamoDB run was performed.
+- Extended payment route tests to cover list, overdue, create, detail, update, mark-paid, and cancel, including request validation and verified account-context propagation. Extended the authenticated end-to-end flow to register and log in a fresh account, create the property/tenant/lease, generate the schedule, and verify a separately registered account cannot list, read, update, pay, cancel, or manually create against those payments.
+- Focused validation passed on 2026-10-27: `pnpm vitest run --silent=true test/unit/app.test.ts test/unit/payment-routes.test.ts test/unit/payment-service.test.ts test/unit/payment-repository.test.ts` (30 tests); `pnpm typecheck`; targeted ESLint; and `git diff --check`. These tests use local in-memory auth/domain stores; no live AWS/DynamoDB validation was performed.
 
 ## P4 — Async
 
@@ -180,9 +182,9 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 ## Current verification snapshot
 
-Latest validation (2026-10-26): payment API and transition changes passed `pnpm typecheck`, 35 focused tests, targeted ESLint, and staged/unstaged `git diff --check`; the two DynamoDB Local tests were skipped because no local endpoint was configured. Lease and payment focused checks passed in the same run. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above; live AWS validation was not performed for this payment work. No Git push was performed.
+Latest validation (2026-10-27): registered-account payment flow and per-endpoint account-isolation/domain coverage passed `pnpm typecheck`, 30 focused tests, targeted ESLint, and `git diff --check`. These tests did not connect to AWS/DynamoDB. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above. No Git push was performed.
 
 ## Next recommended work
 
-1. Complete account-isolation and domain tests for every payment endpoint, and exercise the full registration → property → tenant → lease → schedule flow.
-2. Wire the overdue-payment processor to its scheduled EventBridge invocation; implement the payment quittance job producer under P4.
+1. Wire the overdue-payment processor to its scheduled EventBridge invocation under P4.
+2. Implement the payment quittance job producer and its authorization/idempotency tests under P4.
