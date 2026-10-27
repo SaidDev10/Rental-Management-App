@@ -9,3 +9,10 @@ Human Review, Test, and Deploy
 check the current status of backend implementation in @backend-implementation.md
 continue the implementation with following work
 update the Backend Implementation Status after each step
+
+
+
+
+
+with current changes, what are all the ssm params that must exist?
+for each param, give the name, brief description and expected value

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { AppError, NotFoundError } from '../../shared/errors';
 import { leaseService } from '../lease/service';
+import { enqueueQuittancePdf } from '../../shared/sqs/enqueue-pdf';
 import { createPaymentRepository, type PaymentRepository } from './repository';
 import type {
   CreatePaymentInput,
@@ -94,6 +95,18 @@ export const paymentService = {
     }
 
     return toPayment(payment);
+  },
+
+  async enqueueQuittance(
+    accountId: string,
+    paymentId: string,
+    idempotencyKey: string,
+    repository = repositoryFor(accountId),
+  ): Promise<{ jobId: string }> {
+    const payment = await repository.getById(paymentId);
+    if (!payment) throw new NotFoundError('Payment not found');
+
+    return enqueueQuittancePdf({ accountId, paymentId, documentType: 'QUITTANCE' }, idempotencyKey);
   },
 
   async create(

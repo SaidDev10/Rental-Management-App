@@ -181,6 +181,32 @@ describe('payment routes', () => {
     expect(unauthenticated.status).toBe(401);
   });
 
+  it('enqueues a quittance for the authenticated owner and requires idempotency input', async () => {
+    const enqueueQuittance = vi.fn(async () => ({ jobId: 'Qjob-1' }));
+    const { app } = createApp({ enqueueQuittance });
+    const missingKey = await app.request('/payments/payment-1/quittance', { method: 'POST' });
+    expect(missingKey.status).toBe(400);
+    const invalidKey = await app.request('/payments/payment-1/quittance', {
+      method: 'POST', headers: { 'Idempotency-Key': 'short' },
+    });
+    expect(invalidKey.status).toBe(400);
+    expect(enqueueQuittance).not.toHaveBeenCalled();
+
+    const response = await app.request('/payments/payment-1/quittance', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'quittance-request-0001' },
+    });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ jobId: 'Qjob-1' });
+    expect(enqueueQuittance).toHaveBeenCalledWith(accountId, 'payment-1', 'quittance-request-0001');
+
+    const { app: forbiddenApp, service: forbiddenService } = createApp({ enqueueQuittance }, 'super_admin');
+    expect((await forbiddenApp.request('/payments/payment-1/quittance', {
+      method: 'POST', headers: { 'Idempotency-Key': 'quittance-request-0001' },
+    })).status).toBe(403);
+    expect(forbiddenService.enqueueQuittance).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects invalid payment filters and empty updates before calling the service', async () => {
     const list = vi.fn(async () => ({ items: [payment] }));
     const update = vi.fn(async () => payment);

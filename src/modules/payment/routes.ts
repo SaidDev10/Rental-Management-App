@@ -35,7 +35,7 @@ const recordPaymentSchema = z.object({
 
 type PaymentRouteService = Pick<
   typeof paymentService,
-  'list' | 'overdue' | 'get' | 'create' | 'update' | 'recordPaid' | 'cancel'
+  'list' | 'overdue' | 'get' | 'create' | 'update' | 'recordPaid' | 'cancel' | 'enqueueQuittance'
 >;
 
 export const createPaymentRoutes = (
@@ -170,6 +170,15 @@ export const createPaymentRoutes = (
     c.header('ETag', String(payment.version));
 
     return c.json({ data: payment }, 200);
+  });
+  routes.post('/:id/quittance', async (c) => {
+    const result = await service.enqueueQuittance(
+      getAccountId(c),
+      c.req.param('id'),
+      getIdempotencyKey(c.req.header('Idempotency-Key')),
+    );
+
+    return c.json(result, 202);
   });
   routes.post('/:id/cancel', async (c) => {
     const payment = await service.cancel(

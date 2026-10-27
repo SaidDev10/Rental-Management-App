@@ -114,10 +114,14 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - [x] Add validated SQS payloads, partial-batch processing, and concrete PDF/report/notification worker processors.
 - [x] Add PDF output persistence and atomic job/document completion.
 - [x] Add SES/WhatsApp adapters and reminder/overdue deduplication.
-- [ ] Implement domain/API job producers, including the payment quittance endpoint and its authorization checks.
-- [ ] Provision and configure the queues, DLQs, event-source mappings, templates, and IAM permissions.
+- [x] Implement domain/API job producers, including the payment quittance endpoint and its authorization checks.
+- [x] Provision and configure the queues, DLQs, event-source mappings, templates, and IAM permissions.
 - [ ] Exercise the complete SQS-to-worker-to-document flow against AWS-compatible integration services.
 - [ ] Meet the phase exit criteria: `POST /payments/:id/quittance` produces a quittance and passes idempotency tests.
+
+### Verification snapshot
+- Provisioned stage-named PDF, report, and notification queues with managed SSE, four-day retention, receive-count-3 DLQs, restrictive redrive allow policies, and worker event-source mappings configured for partial batch failures.
+- Added worker Lambda configuration, S3 artifact upload support, log groups, queue/table/document-store/SSM/SES IAM policies, and queue/document/parameter outputs. `terraform fmt -check infra/terraform`, `terraform -chdir=infra/terraform validate`, and `git diff --check -- infra/terraform` passed. No Terraform plan/apply or AWS integration was run.
 
 ## P5 — Aggregation
 
@@ -137,14 +141,18 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** S3 presigned flows, lease/police/condition-report templates, and Arabic rendering validation.
 
-**Status: In progress — basic PDF generation exists; required breadth and validation remain**
+**Status: In progress — lease-related templates and data validated; presigned flows and Arabic validation remain**
 
 - [x] Add Chromium-backed PDF generation for quittance and lease-related job types, with S3 output.
 - [ ] Implement secure presigned upload/download flows and document API authorization.
-- [ ] Complete and validate the lease, fiche de police, and état des lieux templates and document data.
+- [x] Complete and validate the lease, fiche de police, and état des lieux templates and document data.
 - [ ] Bundle and verify the required fonts if/when Arabic templates are introduced.
 - [ ] Add the Arabic PDF fixture test before shipping any Arabic template.
 - [ ] Meet the phase exit criteria: the Arabic fixture renders and extracted text contains the expected shaped glyphs.
+
+### Verification snapshot
+- Added differentiated lease-agreement, fiche de police, and entry/exit état des lieux contexts using account-scoped lease, property, and tenant data. The lease includes dates, rent, charges, deposit, payment terms, and indexation; the police sheet uses available tenant particulars and only the stored ID last-four value; the condition report includes a printable checklist and signature lines.
+- Added local payload/HTML fixtures covering the three lease-related types plus the existing quittance path, including output escaping. Validation passed: `pnpm vitest run test/unit/pdf-documents.test.ts test/unit/document-processors.test.ts` (6 tests), `pnpm typecheck`, targeted ESLint, `pnpm build:pdf`, and `git diff --check`. No AWS services or resources were used.
 
 ## P7 — Reports
 
@@ -184,7 +192,11 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 Latest validation (2026-10-27): registered-account payment flow and per-endpoint account-isolation/domain coverage passed `pnpm typecheck`, 30 focused tests, targeted ESLint, and `git diff --check`. These tests did not connect to AWS/DynamoDB. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above. No Git push was performed.
 
+Batch status (2026-10-27): delegated P4-T2, P4-T3, and P6-T2 to the backend implementation agent; all three are marked In progress in the Kanban and are the current ready batch.
+
+P4-T2 verification (2026-10-27): implemented the owner-authenticated quittance route and idempotent PDF job/SQS producer. `pnpm exec vitest run test/unit/payment-routes.test.ts test/unit/enqueue-pdf.test.ts` passed (8 tests); `pnpm typecheck` passed; targeted ESLint passed. No live AWS/SQS run was performed.
+
 ## Next recommended work
 
 1. Wire the overdue-payment processor to its scheduled EventBridge invocation under P4.
-2. Implement the payment quittance job producer and its authorization/idempotency tests under P4.
+2. Complete the document/template breadth for P6 by validating the lease, fiche de police, and état des lieux data and output.
