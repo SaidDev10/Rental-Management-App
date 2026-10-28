@@ -12,7 +12,7 @@ const records: WorkerEntity[] = [
   { PK: 'ACCOUNT#account-1', SK: sk.lease('lease-1'), accountId, entityType: 'Lease', id: 'lease-1', propertyId: 'property-1', tenantIds: ['tenant-1'], startDate: '2026-01-01', endDate: '2026-12-31', rentAmount: 125000, chargesAmount: 12500, depositAmount: 250000, paymentDayOfMonth: 5, billingFrequency: 'monthly', indexation: { enabled: true, ratePct: 3, effectiveFrom: '2027-01-01' }, status: 'active' },
   { PK: 'ACCOUNT#account-1', SK: sk.property('property-1'), accountId, entityType: 'Property', label: 'Appartement Centre', address: { line1: '10 rue Test', line2: 'Appt 2', city: 'Rabat', postalCode: '10000', country: 'MA' }, propertyType: 'apartment', areaSqm: 82, rooms: 3 },
   { PK: 'ACCOUNT#account-1', SK: sk.payment('payment-1'), accountId, entityType: 'Payment', leaseId: 'lease-1', propertyId: 'property-1', tenantId: 'tenant-1', periodStart: '2026-10-01', periodEnd: '2026-10-31', amountDue: 137500, amountPaid: 137500, status: 'paid' },
-  { PK: 'ACCOUNT#account-1', SK: sk.tenant('tenant-1'), accountId, entityType: 'Tenant', firstName: 'Amina', lastName: '<script>alert(1)</script>', email: 'amina@example.test', phone: '+212600000000', dateOfBirth: '1990-04-02', address: { line1: '2 rue Test', city: 'Rabat', country: 'MA' }, idDocumentType: 'CIN', idDocumentLast4: '1234' },
+  { PK: 'ACCOUNT#account-1', SK: sk.tenant('tenant-1'), accountId, entityType: 'Tenant', firstName: 'Amina', lastName: '<script>alert(1)</script>', email: 'amina@example.test', phone: '+212600000000', dateOfBirth: '1990-04-02', address: { line1: '2 rue Test', city: 'Rabat', country: 'MA' }, idDocumentType: 'CIN', idDocumentLast4: '1234', idDocument: { numberEnc: 'encrypted-private-id-number' } },
 ];
 const load = async (_account: string, key: string): Promise<WorkerEntity | undefined> => records.find((item) => item.SK === key);
 const base = { jobId: 'job-1', accountId };
@@ -46,6 +46,8 @@ describe('PDF document payloads and rendered HTML', () => {
     expect(output).toContain('1990-04-02');
     expect(output).toContain('CIN');
     expect(output).toContain('1234');
+    expect(output).not.toContain('encrypted-private-id-number');
+    expect(renderPdfHtml(context)).not.toContain('encrypted-private-id-number');
     expect(output).toContain('2 rue Test, Rabat, MA');
   });
 

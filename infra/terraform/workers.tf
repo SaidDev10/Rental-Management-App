@@ -39,15 +39,15 @@ locals {
   }
   worker_queue_settings = {
     pdf = {
-      visibility_timeout = 360
+      visibility_timeout = 365
       timeout            = 60
     }
     report = {
-      visibility_timeout = 720
+      visibility_timeout = 725
       timeout            = 120
     }
     notification = {
-      visibility_timeout = 180
+      visibility_timeout = 185
       timeout            = 30
     }
   }

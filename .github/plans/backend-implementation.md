@@ -2,7 +2,7 @@
 
 This tracker follows the phase sequence and exit criteria in [Backend Specification §20](../.github/backend.md#20-implementation-phases). Work has also been done ahead of the sequence on async workers, aggregation, PDF generation, and reports; those early components do not mean their phases are complete.
 
-**Overall status: P2 — Auth complete; P3 — Core CRUD complete; P4 — Async in progress.** P0 through P3 exit criteria are verified; no later phase currently meets all of its specification exit criteria. Items are checked only when the corresponding deliverable is implemented and verified; items not checked are outstanding.
+**Overall status: P2 — Auth complete; P3 — Core CRUD complete; P4 — Async in progress.** P0 through P3 exit criteria are repository-verified. P4's end-to-end flow and stated exit criterion are user-reported as verified in dev; the separately tracked overdue-payment EventBridge invocation remains outstanding. Items are checked only when the corresponding deliverable is implemented and verified; user-reported external verification is identified as such.
 
 ## P0 — Foundations
 
@@ -108,7 +108,7 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** job entity, SQS producers, quittance PDF worker, and SES notification worker.
 
-**Status: In progress — worker foundation implemented ahead of the API**
+**Status: In progress — SQS-to-document flow and quittance exit criteria verified in dev; overdue-payment scheduling remains outstanding**
 
 - [x] Add account-scoped job state transitions, conditional claims, retry handling, and terminal failure handling.
 - [x] Add validated SQS payloads, partial-batch processing, and concrete PDF/report/notification worker processors.
@@ -116,12 +116,12 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - [x] Add SES/WhatsApp adapters and reminder/overdue deduplication.
 - [x] Implement domain/API job producers, including the payment quittance endpoint and its authorization checks.
 - [x] Provision and configure the queues, DLQs, event-source mappings, templates, and IAM permissions.
-- [ ] Exercise the complete SQS-to-worker-to-document flow against AWS-compatible integration services.
-- [ ] Meet the phase exit criteria: `POST /payments/:id/quittance` produces a quittance and passes idempotency tests.
+- [x] Exercise the complete SQS-to-worker-to-document flow against AWS-compatible integration services. (User-reported dev verification, 2026-10-28.)
+- [x] Meet the phase exit criteria: `POST /payments/:id/quittance` produces a quittance and passes idempotency tests. (User-reported dev verification, 2026-10-28.)
 
 ### Verification snapshot
 - Provisioned stage-named PDF, report, and notification queues with managed SSE, four-day retention, receive-count-3 DLQs, restrictive redrive allow policies, and worker event-source mappings configured for partial batch failures.
-- Added worker Lambda configuration, S3 artifact upload support, log groups, queue/table/document-store/SSM/SES IAM policies, and queue/document/parameter outputs. `terraform fmt -check infra/terraform`, `terraform -chdir=infra/terraform validate`, and `git diff --check -- infra/terraform` passed. No Terraform plan/apply or AWS integration was run.
+- Added worker Lambda configuration, S3 artifact upload support, log groups, queue/table/document-store/SSM/SES IAM policies, and queue/document/parameter outputs. `terraform fmt -check infra/terraform`, `terraform -chdir=infra/terraform validate`, and `git diff --check -- infra/terraform` passed. At that validation stage, no Terraform plan/apply or AWS integration had been run; the later user-reported dev verification is recorded below.
 
 ## P5 — Aggregation
 
@@ -192,11 +192,14 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 Latest validation (2026-10-27): registered-account payment flow and per-endpoint account-isolation/domain coverage passed `pnpm typecheck`, 30 focused tests, targeted ESLint, and `git diff --check`. These tests did not connect to AWS/DynamoDB. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above. No Git push was performed.
 
-Batch status (2026-10-27): delegated P4-T2, P4-T3, and P6-T2 to the backend implementation agent; all three are marked In progress in the Kanban and are the current ready batch.
+Batch status (2026-10-28): delegated P4-T2, P4-T3, and P6-T2 to the backend implementation agent. P4-T2 and P6-T2 implementation/test evidence is recorded above. The user reports deploying P4-T3 to dev and confirms all verification checks passed on 2026-10-28. P4-T3 is complete based on user-reported external verification; the assistant did not inspect the AWS account.
+
+P4-T3/P4-T4 dev verification (2026-10-28): user reports the deployment and all requested verification checks passed, including the dev SQS-to-worker-to-document flow and quittance idempotency. P4-T3 and P4-T4 are complete based on user-reported external verification; the assistant did not inspect the AWS account or run a live queue-to-worker test.
 
 P4-T2 verification (2026-10-27): implemented the owner-authenticated quittance route and idempotent PDF job/SQS producer. `pnpm exec vitest run test/unit/payment-routes.test.ts test/unit/enqueue-pdf.test.ts` passed (8 tests); `pnpm typecheck` passed; targeted ESLint passed. No live AWS/SQS run was performed.
 
 ## Next recommended work
 
-1. Wire the overdue-payment processor to its scheduled EventBridge invocation under P4.
-2. Complete the document/template breadth for P6 by validating the lease, fiche de police, and état des lieux data and output.
+1. Wire the overdue-payment processor to its scheduled EventBridge invocation (P4-T1).
+2. Bundle and verify required fonts for Arabic PDF rendering (P6-T3).
+3. Benchmark the 10,000-row export against the deployed worker configuration (P7-T2).
