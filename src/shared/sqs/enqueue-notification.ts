@@ -3,7 +3,6 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 
 import { getDynamoDocumentClient } from '../aws/clients';
 import { getSqsClient } from '../aws/clients';
-import { readPdfWorkerConfig } from '../config';
 import { pk, sk } from '../db/keys';
 import type { NotificationJobPayload } from '../../workers/payloads';
 
@@ -21,7 +20,11 @@ export const enqueueNotification = async (
   sourceJobId: string,
   notification: NotificationInput,
 ): Promise<void> => {
-  const { TABLE_NAME, NOTIFICATION_QUEUE_URL } = readPdfWorkerConfig();
+  const TABLE_NAME = process.env.TABLE_NAME;
+  const NOTIFICATION_QUEUE_URL = process.env.NOTIFICATION_QUEUE_URL;
+  if (!TABLE_NAME || !NOTIFICATION_QUEUE_URL) {
+    throw new Error('TABLE_NAME and NOTIFICATION_QUEUE_URL must be configured for notification enqueue.');
+  }
   const client = getDynamoDocumentClient();
   const queueClient = getSqsClient();
   const accountId = notification.accountId;

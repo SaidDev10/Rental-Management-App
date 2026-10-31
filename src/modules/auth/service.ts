@@ -1,6 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 
 import { AppError, UnauthenticatedError } from '../../shared/errors';
+import { enqueueNotification } from '../../shared/sqs/enqueue-notification';
+import { baseLogger } from '../../shared/logger';
+import {
+  createMfaChallengeToken,
+  createOtpChallengeStore,
+  OtpChallengeError,
+  type OtpChallenge,
+  type OtpChallengeStore,
+} from './otp-challenges';
 import { createAuthRepository, type AuthRepository } from './repository';
 import { hashPassword, verifyPassword } from './passwords';
 import { enforceRateLimit } from '../../shared/security/rate-limit';
@@ -23,26 +32,40 @@ const assertAccountActive = (accountStatus: string | undefined): void => {
   }
 };
 
-type MfaChallenge = {
-  userId: string;
-  accountId: string;
-  email: string;
-  code: string;
-  expiresAt: number;
-  attempts: number;
+const getDefaultOtpChallengeStore = (): OtpChallengeStore => createOtpChallengeStore();
+const hashCode = (code: string): string => createHash('sha256').update(code).digest('hex');
+const generateOtp = (): string => `${randomInt(100_000, 1_000_000)}`;
+
+const throwOtpChallengeError = (error: unknown): never => {
+  if (!(error instanceof OtpChallengeError)) throw error;
+  if (error.reason === 'expired') {
+    throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
+  }
+  if (error.reason === 'exhausted') {
+    throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
+  }
+
+  throw new AppError('Invalid OTP challenge', 401, 'INVALID_OTP');
 };
 
-type PasswordResetChallenge = {
-  userId: string;
-  accountId: string;
-  email: string;
-  code: string;
-  expiresAt: number;
-  attempts: number;
-};
+const createMfaChallenge = async (
+  userRecord: { id: string; accountId: string; email: string },
+  challengeStore: OtpChallengeStore,
+): Promise<{ challengeToken: string; code: string; challenge: OtpChallenge }> => {
+  const challengeToken = createMfaChallengeToken(userRecord.id);
+  const code = generateOtp();
+  const challenge = await challengeStore.create({
+    userId: userRecord.id,
+    accountId: userRecord.accountId,
+    email: userRecord.email,
+    purpose: 'LOGIN_MFA',
+    challengeToken,
+    code,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+  });
 
-const mfaChallenges = new Map<string, MfaChallenge>();
-const passwordResetChallenges = new Map<string, PasswordResetChallenge>();
+  return { challengeToken, code, challenge };
+};
 
 const isLockedOut = (userRecord: { failedLoginAttempts?: number; lockedUntil?: string | null }): boolean => {
   const attempts = userRecord.failedLoginAttempts ?? 0;
@@ -55,44 +78,12 @@ const isLockedOut = (userRecord: { failedLoginAttempts?: number; lockedUntil?: s
   return attempts >= 5 && (!lockedUntil || lockedUntil > Date.now());
 };
 
-const createMfaChallenge = (userRecord: { id: string; accountId: string; email: string; mfaEnabled?: boolean }): { challengeToken: string; challenge: MfaChallenge } => {
-  const challengeToken = randomUUID();
-  const code = `${Math.floor(100000 + Math.random() * 900000)}`;
-  const challenge: MfaChallenge = {
-    userId: userRecord.id,
-    accountId: userRecord.accountId,
-    email: userRecord.email,
-    code,
-    expiresAt: Date.now() + 5 * 60 * 1000,
-    attempts: 0,
-  };
-
-  mfaChallenges.set(challengeToken, challenge);
-
-  return { challengeToken, challenge };
-};
-
-const createPasswordResetChallenge = (userRecord: { id: string; accountId: string; email: string }): { challengeToken: string; challenge: PasswordResetChallenge } => {
-  const challengeToken = randomUUID();
-  const code = `${Math.floor(100000 + Math.random() * 900000)}`;
-  const challenge: PasswordResetChallenge = {
-    userId: userRecord.id,
-    accountId: userRecord.accountId,
-    email: userRecord.email,
-    code,
-    expiresAt: Date.now() + 15 * 60 * 1000,
-    attempts: 0,
-  };
-
-  passwordResetChallenges.set(challengeToken, challenge);
-
-  return { challengeToken, challenge };
-};
-
 export const authService = {
   async login(
     { email, password }: LoginInput,
     repository = getDefaultAuthRepository(),
+    challengeStore?: OtpChallengeStore,
+    enqueueMfaNotification = enqueueNotification,
   ): Promise<LoginResult | MfaChallengeResult> {
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -113,11 +104,12 @@ export const authService = {
     const isValidPassword = await verifyPassword(password, userRecord.passwordHash);
 
     if (!isValidPassword) {
-      const nextAttempts = (userRecord.failedLoginAttempts ?? 0) + 1;
-      userRecord.failedLoginAttempts = nextAttempts;
+      const nextAttempts = await repository.recordLoginFailure({
+        userId: userRecord.id,
+        accountId: userRecord.accountId,
+      });
 
       if (nextAttempts >= 5) {
-        userRecord.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
         throw new AppError('Account locked', 423, 'ACCOUNT_LOCKED');
       }
 
@@ -126,11 +118,31 @@ export const authService = {
 
     assertAccountActive(userRecord.accountStatus);
 
-    userRecord.failedLoginAttempts = 0;
-    userRecord.lockedUntil = null;
+    await repository.resetLoginFailures({
+      userId: userRecord.id,
+      accountId: userRecord.accountId,
+    });
 
     if (userRecord.mfaEnabled) {
-      const { challengeToken } = createMfaChallenge(userRecord);
+      const { challengeToken, code } = await createMfaChallenge(
+        userRecord,
+        challengeStore ?? getDefaultOtpChallengeStore(),
+      );
+      try {
+        await enqueueMfaNotification(randomUUID(), {
+          accountId: userRecord.accountId,
+          kind: 'MFA_OTP',
+          userId: userRecord.id,
+          code,
+          channel: 'email',
+        });
+      } catch (error) {
+        baseLogger.error(
+          { errorName: error instanceof Error ? error.name : 'UnknownError' },
+          'MFA notification enqueue failed',
+        );
+        throw error;
+      }
 
       return {
         mfaRequired: true,
@@ -225,40 +237,38 @@ export const authService = {
     };
   },
 
-  async verifyMfa({ challengeToken, code }: MfaVerifyInput, repository = getDefaultAuthRepository()): Promise<LoginResult> {
-    const challenge = mfaChallenges.get(challengeToken);
+  async verifyMfa(
+    { challengeToken, code }: MfaVerifyInput,
+    repository = getDefaultAuthRepository(),
+    challengeStore: OtpChallengeStore = getDefaultOtpChallengeStore(),
+  ): Promise<LoginResult> {
+    const challenge = await challengeStore.getMfa(challengeToken);
 
     if (!challenge) {
       throw new AppError('Invalid MFA challenge', 401, 'INVALID_OTP');
     }
 
     if (Date.now() > challenge.expiresAt) {
-      mfaChallenges.delete(challengeToken);
       throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
     }
 
     await enforceRateLimit('auth-mfa-user', challenge.userId, 10, 60 * 60);
-    challenge.attempts += 1;
+    const updatedChallenge = await challengeStore
+      .incrementAttempts(challenge, 5, Date.now())
+      .catch((error: unknown) => throwOtpChallengeError(error));
 
-    if (challenge.attempts > 5) {
-      mfaChallenges.delete(challengeToken);
-      throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
-    }
-
-    if (challenge.code !== code) {
-      if (challenge.attempts >= 5) {
-        mfaChallenges.delete(challengeToken);
+    if (updatedChallenge.codeHash !== hashCode(code)) {
+      if (updatedChallenge.attempts >= 5) {
         throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
       }
-
       throw new AppError('Invalid MFA code', 401, 'INVALID_OTP');
     }
 
-    mfaChallenges.delete(challengeToken);
+    await challengeStore.delete(updatedChallenge, Date.now());
 
     const userRecord = await repository.findUserByEmail(challenge.email);
 
-    if (!userRecord) {
+    if (!userRecord || userRecord.id !== challenge.userId || userRecord.accountId !== challenge.accountId) {
       throw new UnauthenticatedError('Invalid credentials');
     }
 
@@ -302,32 +312,55 @@ export const authService = {
     };
   },
 
-  async resendMfaChallenge(challengeToken: string): Promise<{ sent: true }> {
-    const challenge = mfaChallenges.get(challengeToken);
+  async resendMfaChallenge(
+    challengeToken: string,
+    challengeStore: OtpChallengeStore = getDefaultOtpChallengeStore(),
+    enqueueMfaNotification = enqueueNotification,
+  ): Promise<{ sent: true }> {
+    const challenge = await challengeStore.getMfa(challengeToken);
 
     if (!challenge) {
       throw new AppError('Invalid MFA challenge', 401, 'INVALID_OTP');
     }
 
     if (Date.now() > challenge.expiresAt) {
-      mfaChallenges.delete(challengeToken);
       throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
     }
     await enforceRateLimit('auth-mfa-resend-user', challenge.userId, 3, 60 * 60);
 
-    const nextChallenge = createMfaChallenge({
+    const nextChallenge = await createMfaChallenge({
       id: challenge.userId,
       accountId: challenge.accountId,
       email: challenge.email,
-    });
+    }, challengeStore);
 
-    mfaChallenges.delete(challengeToken);
-    mfaChallenges.set(nextChallenge.challengeToken, nextChallenge.challenge);
+    try {
+      await enqueueMfaNotification(randomUUID(), {
+        accountId: challenge.accountId,
+        kind: 'MFA_OTP',
+        userId: challenge.userId,
+        code: nextChallenge.code,
+        channel: 'email',
+      });
+    } catch (error) {
+      baseLogger.error(
+        { errorName: error instanceof Error ? error.name : 'UnknownError' },
+        'MFA notification enqueue failed',
+      );
+      throw error;
+    }
+
+    await challengeStore.delete(challenge, Date.now());
 
     return { sent: true };
   },
 
-  async requestPasswordReset({ email }: { email: string }, repository = getDefaultAuthRepository()): Promise<{ sent: true; challengeToken?: string; expiresIn?: number }> {
+  async requestPasswordReset(
+    { email }: { email: string },
+    repository = getDefaultAuthRepository(),
+    challengeStore: OtpChallengeStore = getDefaultOtpChallengeStore(),
+    enqueueResetNotification = enqueueNotification,
+  ): Promise<{ sent: true }> {
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail) {
       throw new AppError('Validation error', 400, 'VALIDATION_ERROR');
@@ -340,57 +373,83 @@ export const authService = {
       return { sent: true };
     }
 
-    const { challengeToken } = createPasswordResetChallenge(userRecord);
+    const code = generateOtp();
+    try {
+      await challengeStore.create({
+        userId: userRecord.id,
+        accountId: userRecord.accountId,
+        email: userRecord.email,
+        purpose: 'PASSWORD_RESET',
+        challengeToken: randomUUID(),
+        code,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+    } catch (error) {
+      baseLogger.error(
+        { errorName: error instanceof Error ? error.name : 'UnknownError' },
+        'Password reset challenge persistence failed',
+      );
+      throw error;
+    }
 
-    return { sent: true, challengeToken, expiresIn: 900 };
+    try {
+      await enqueueResetNotification(randomUUID(), {
+        accountId: userRecord.accountId,
+        kind: 'PASSWORD_RESET',
+        userId: userRecord.id,
+        code,
+        channel: 'email',
+      });
+    } catch (error) {
+      baseLogger.error(
+        { errorName: error instanceof Error ? error.name : 'UnknownError' },
+        'Password reset notification enqueue failed',
+      );
+      throw error;
+    }
+
+    return { sent: true };
   },
 
   async resetPassword(
-    { challengeToken, code, password }: { challengeToken: string; code: string; password: string },
+    { email, code, newPassword }: { email: string; code: string; newPassword: string },
     repository = getDefaultAuthRepository(),
+    challengeStore: OtpChallengeStore = getDefaultOtpChallengeStore(),
   ): Promise<{ passwordReset: true }> {
-    const challenge = passwordResetChallenges.get(challengeToken);
-    if (!challenge) {
+    if (newPassword.length < 12) {
+      throw new AppError('Validation error', 400, 'VALIDATION_ERROR');
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const userRecord = normalizedEmail ? await repository.findUserByEmail(normalizedEmail) : undefined;
+    const challenge = userRecord ? await challengeStore.getPasswordReset(userRecord.id) : undefined;
+    if (!userRecord || !challenge || challenge.email !== normalizedEmail || challenge.userId !== userRecord.id) {
       throw new AppError('Invalid password reset code', 401, 'INVALID_OTP');
     }
 
     if (Date.now() > challenge.expiresAt) {
-      passwordResetChallenges.delete(challengeToken);
-      throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
-    }
-
-    await enforceRateLimit('auth-password-reset-user', challenge.userId, 10, 60 * 60);
-    challenge.attempts += 1;
-
-    if (challenge.attempts > 5) {
-      passwordResetChallenges.delete(challengeToken);
-      throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
-    }
-
-    if (challenge.code !== code) {
-      if (challenge.attempts >= 5) {
-        passwordResetChallenges.delete(challengeToken);
-        throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
-      }
-
       throw new AppError('Invalid password reset code', 401, 'INVALID_OTP');
     }
 
-    if (password.length < 8) {
-      throw new AppError('Validation error', 400, 'VALIDATION_ERROR');
+    const updatedChallenge = await challengeStore
+      .incrementAttempts(challenge, 5, Date.now())
+      .catch((error: unknown) => throwOtpChallengeError(error));
+
+    if (updatedChallenge.codeHash !== hashCode(code)) {
+      if (updatedChallenge.attempts >= 5) {
+        throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
+      }
+      throw new AppError('Invalid password reset code', 401, 'INVALID_OTP');
     }
 
-    const userRecord = await repository.findUserByEmail(challenge.email);
-    if (!userRecord) {
-      throw new UnauthenticatedError('Invalid credentials');
-    }
-
-    passwordResetChallenges.delete(challengeToken);
-    await repository.updatePassword({
-      userId: userRecord.id,
-      accountId: userRecord.accountId,
-      passwordHash: await hashPassword(password),
-    });
+    const passwordHash = await hashPassword(newPassword);
+    await challengeStore
+      .completePasswordReset(updatedChallenge, passwordHash, () => repository.updatePassword({
+        userId: userRecord.id,
+        accountId: userRecord.accountId,
+        passwordHash,
+      }))
+      .catch((error: unknown) => throwOtpChallengeError(error));
 
     return { passwordReset: true };
   },

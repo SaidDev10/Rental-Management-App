@@ -1,13 +1,91 @@
-import { DynamoDBDocumentClient, GetCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, ScanCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAuthRepository, createDynamoAuthRepository } from '../../src/modules/auth/repository';
 import { hashPassword } from '../../src/modules/auth/passwords';
+import { createHash, randomUUID } from 'node:crypto';
 import { authService } from '../../src/modules/auth/service';
+import { OtpChallengeError, type OtpChallenge, type OtpChallengeStore } from '../../src/modules/auth/otp-challenges';
 
 const setDynamoAuthEnv = (): void => {
   process.env.TABLE_NAME = 'rental-app-test';
   process.env.USE_DYNAMO_AUTH = 'true';
+};
+
+const createMemoryOtpStore = (): {
+  store: OtpChallengeStore;
+  codes: Map<string, string>;
+  created: OtpChallenge[];
+  completeCalls: ReturnType<typeof vi.fn>;
+} => {
+  const challenges = new Map<string, OtpChallenge>();
+  const codes = new Map<string, string>();
+  const created: OtpChallenge[] = [];
+  const completing = new Set<string>();
+  const challengeKey = (challenge: OtpChallenge): string =>
+    `${challenge.purpose}:${challenge.purpose === 'LOGIN_MFA' ? challenge.challengeToken : challenge.userId}`;
+  const completeCalls = vi.fn(async (
+    challenge: OtpChallenge,
+    _passwordHash: string,
+    updateLocalPassword: () => Promise<void>,
+  ) => {
+    const key = challengeKey(challenge);
+    const current = challenges.get(key);
+    if (!current || current.challengeId !== challenge.challengeId || completing.has(key)) {
+      throw new OtpChallengeError('consumed');
+    }
+
+    completing.add(key);
+    try {
+      await updateLocalPassword();
+      challenges.delete(key);
+    } finally {
+      completing.delete(key);
+    }
+  });
+  const store: OtpChallengeStore = {
+    async create(input) {
+      const challenge: OtpChallenge = {
+        userId: input.userId,
+        accountId: input.accountId,
+        email: input.email,
+        purpose: input.purpose,
+        challengeToken: input.challengeToken,
+        challengeId: randomUUID(),
+        codeHash: createHash('sha256').update(input.code).digest('hex'),
+        expiresAt: input.expiresAt,
+        attempts: 0,
+      };
+      challenges.set(`${challenge.purpose}:${challenge.purpose === 'LOGIN_MFA' ? challenge.challengeToken : challenge.userId}`, challenge);
+      codes.set(challenge.challengeToken, input.code);
+      created.push(challenge);
+
+      return challenge;
+    },
+    async getMfa(challengeToken) {
+      return challenges.get(`LOGIN_MFA:${challengeToken}`);
+    },
+    async getPasswordReset(userId) {
+      return challenges.get(`PASSWORD_RESET:${userId}`);
+    },
+    async incrementAttempts(challenge, maxAttempts, now) {
+      const key = `${challenge.purpose}:${challenge.purpose === 'LOGIN_MFA' ? challenge.challengeToken : challenge.userId}`;
+      const current = challenges.get(key);
+      if (!current || current.challengeId !== challenge.challengeId) throw new Error('ConditionalCheckFailedException');
+      if (current.expiresAt <= now) throw new Error('ConditionalCheckFailedException');
+      if (current.attempts >= maxAttempts) throw new OtpChallengeError('exhausted');
+      const updated = { ...current, attempts: current.attempts + 1 };
+      challenges.set(key, updated);
+
+      return updated;
+    },
+    async delete(challenge) {
+      challenges.delete(challengeKey(challenge));
+    },
+    completePasswordReset: completeCalls,
+  };
+
+  return { store, codes, created, completeCalls };
 };
 
 afterEach(() => {
@@ -18,6 +96,52 @@ afterEach(() => {
 });
 
 describe('auth service repository flow', () => {
+  it('persists login failure counters and lockout state in DynamoDB', async () => {
+    setDynamoAuthEnv();
+    const updates: UpdateCommand[] = [];
+    const repository = createDynamoAuthRepository({
+      send: async (command: unknown) => {
+        if (command instanceof UpdateCommand) {
+          updates.push(command);
+          if (updates.length === 1) {
+            return { Attributes: { failedLoginAttempts: 5 } };
+          }
+        }
+
+        return {};
+      },
+    } as unknown as DynamoDBDocumentClient);
+
+    await expect(repository.recordLoginFailure({
+      userId: 'user_lockout',
+      accountId: 'account_lockout',
+    })).resolves.toBe(5);
+
+    expect(updates).toHaveLength(2);
+    expect(updates[0]?.input).toMatchObject({
+      Key: { PK: 'ACCOUNT#account_lockout', SK: 'USER#user_lockout' },
+      UpdateExpression: expect.stringContaining('if_not_exists(failedLoginAttempts, :zero) + :one'),
+      ConditionExpression: expect.stringContaining('accountId = :accountId'),
+      ReturnValues: 'ALL_NEW',
+    });
+    expect(updates[1]?.input).toMatchObject({
+      Key: { PK: 'ACCOUNT#account_lockout', SK: 'USER#user_lockout' },
+      UpdateExpression: expect.stringContaining('SET lockedUntil = :lockedUntil'),
+      ConditionExpression: expect.stringContaining('failedLoginAttempts >= :threshold'),
+    });
+
+    await repository.resetLoginFailures({
+      userId: 'user_lockout',
+      accountId: 'account_lockout',
+    });
+
+    expect(updates).toHaveLength(3);
+    expect(updates[2]?.input).toMatchObject({
+      Key: { PK: 'ACCOUNT#account_lockout', SK: 'USER#user_lockout' },
+      UpdateExpression: expect.stringContaining('failedLoginAttempts = :zero, lockedUntil = :null'),
+    });
+  });
+
   it('logs in when the repository returns a verified user record', async () => {
     const repository = {
       findUserByEmail: async () => ({
@@ -38,6 +162,7 @@ describe('auth service repository flow', () => {
         sessionId: 'session_user_123',
         familyId: 'family_user_123',
       }),
+      resetLoginFailures: async () => undefined,
       createAccountAndUser: async () => {
         throw new Error('not used');
       },
@@ -85,7 +210,7 @@ describe('auth service repository flow', () => {
   it('issues a password reset challenge for a valid email and validates the reset code', async () => {
     process.env.STAGE = 'test';
     process.env.USE_DYNAMO_AUTH = 'false';
-    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const otpStore = createMemoryOtpStore();
     const user = {
       id: 'user_reset',
       accountId: 'account_reset',
@@ -102,13 +227,33 @@ describe('auth service repository flow', () => {
       updatePassword,
     };
 
-    const challenge = await authService.requestPasswordReset({ email: 'owner@example.com' }, repository as never);
-    expect(challenge.sent).toBe(true);
-    expect(challenge.challengeToken).toBeTruthy();
+    let resetCode = '';
+    const enqueueNotification = vi.fn(async (sourceJobId: string, notification: { code: string }) => {
+      expect(sourceJobId).toBeTruthy();
+      resetCode = notification.code;
+    });
+    const challenge = await authService.requestPasswordReset(
+      { email: 'owner@example.com' },
+      repository as never,
+      otpStore.store,
+      enqueueNotification as never,
+    );
+    expect(challenge).toEqual({ sent: true });
+    expect(otpStore.created[0]?.expiresAt).toBeGreaterThan(Date.now());
+    expect(otpStore.created[0]?.expiresAt).toBeLessThanOrEqual(Date.now() + 5 * 60 * 1000);
+    expect(enqueueNotification).toHaveBeenCalledOnce();
+    expect(enqueueNotification.mock.calls[0]?.[1]).toMatchObject({
+      accountId: 'account_reset',
+      kind: 'PASSWORD_RESET',
+      userId: 'user_reset',
+      channel: 'email',
+    });
+    const code = resetCode;
 
     const resetResult = await authService.resetPassword(
-      { challengeToken: challenge.challengeToken!, code: '100000', password: 'newsupersecret123' },
+      { email: 'owner@example.com', code, newPassword: 'newsupersecret123' },
       repository as never,
+      otpStore.store,
     );
 
     expect(resetResult).toMatchObject({ passwordReset: true });
@@ -117,12 +262,283 @@ describe('auth service repository flow', () => {
       accountId: 'account_reset',
       passwordHash: expect.any(String),
     });
+    expect(otpStore.completeCalls).toHaveBeenCalledOnce();
+  });
+
+  it('returns the same password-forgot response for an unknown email without enqueueing delivery', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const enqueueNotification = vi.fn();
+    const result = await authService.requestPasswordReset(
+      { email: 'missing@example.com' },
+      { findUserByEmail: vi.fn().mockResolvedValue(undefined) } as never,
+      createMemoryOtpStore().store,
+      enqueueNotification as never,
+    );
+
+    expect(result).toEqual({ sent: true });
+    expect(enqueueNotification).not.toHaveBeenCalled();
+  });
+
+  it('propagates challenge persistence and delivery failures without logging reset data', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const user = {
+      id: 'user_reset_error',
+      accountId: 'account_reset_error',
+      email: 'reset-error@example.com',
+      name: 'Reset Owner',
+      role: 'owner' as const,
+      locale: 'fr' as const,
+      accountStatus: 'active',
+      passwordHash: await hashPassword('supersecret123'),
+    };
+    const repository = { findUserByEmail: vi.fn().mockResolvedValue(user) };
+    const storeFailure = new Error('Dynamo unavailable');
+    const store = createMemoryOtpStore().store;
+    await expect(authService.requestPasswordReset(
+      { email: user.email },
+      repository as never,
+      { ...store, create: async () => { throw storeFailure; } },
+      vi.fn() as never,
+    )).rejects.toBe(storeFailure);
+
+    const enqueueFailure = new Error('SQS unavailable');
+    await expect(authService.requestPasswordReset(
+      { email: user.email },
+      repository as never,
+      createMemoryOtpStore().store,
+      async () => { throw enqueueFailure; },
+    )).rejects.toBe(enqueueFailure);
+  });
+
+  it('delivers login and resend MFA codes through notification jobs without returning codes', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const otpStore = createMemoryOtpStore();
+    const repository = {
+      findUserByEmail: async () => ({
+        id: 'user_mfa_delivery',
+        accountId: 'account_mfa_delivery',
+        email: 'mfa-delivery@example.com',
+        name: 'MFA Owner',
+        role: 'owner' as const,
+        locale: 'fr' as const,
+        accountStatus: 'active',
+        mfaEnabled: true,
+        passwordHash: await hashPassword('supersecret123'),
+      }),
+      resetLoginFailures: vi.fn(),
+    };
+    const enqueued: Array<{ accountId: string; kind: string; userId: string; code: string; channel: string }> = [];
+    const enqueue = async (_sourceJobId: string, payload: typeof enqueued[number]) => {
+      enqueued.push(payload);
+    };
+    const login = await authService.login(
+      { email: 'mfa-delivery@example.com', password: 'supersecret123' },
+      repository as never,
+      otpStore.store,
+      enqueue as never,
+    );
+
+    expect(login).toMatchObject({ mfaRequired: true });
+    expect(login).not.toHaveProperty('code');
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]).toMatchObject({
+      accountId: 'account_mfa_delivery',
+      kind: 'MFA_OTP',
+      userId: 'user_mfa_delivery',
+      channel: 'email',
+    });
+    expect(enqueued[0]?.code).toMatch(/^\d{6}$/);
+
+    if (!('mfaRequired' in login)) throw new Error('Expected an MFA challenge');
+    await expect(authService.resendMfaChallenge(login.challengeToken, otpStore.store, enqueue as never))
+      .resolves.toEqual({ sent: true });
+    expect(enqueued).toHaveLength(2);
+    expect(enqueued[1]).toMatchObject({
+      accountId: 'account_mfa_delivery',
+      kind: 'MFA_OTP',
+      userId: 'user_mfa_delivery',
+      channel: 'email',
+    });
+    expect(enqueued[1]?.code).toMatch(/^\d{6}$/);
+    expect(enqueued[1]?.code).not.toBe(enqueued[0]?.code);
+  });
+
+  it('keeps a valid reset challenge when password persistence fails', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const otpStore = createMemoryOtpStore();
+    const user = {
+      id: 'user_reset_update_failure',
+      accountId: 'account_reset_update_failure',
+      email: 'update-failure@example.com',
+      name: 'Reset Owner',
+      role: 'owner' as const,
+      locale: 'fr' as const,
+      accountStatus: 'active',
+      passwordHash: await hashPassword('supersecret123'),
+    };
+    const updateFailure = new Error('Password persistence failed');
+    const repository = {
+      findUserByEmail: vi.fn().mockResolvedValue(user),
+      updatePassword: vi.fn(async () => { throw updateFailure; }),
+    };
+    let code = '';
+    await authService.requestPasswordReset(
+      { email: user.email },
+      repository as never,
+      otpStore.store,
+      (async (sourceJobId: string, notification: { code: string }) => {
+        expect(sourceJobId).toBeTruthy();
+        code = notification.code;
+      }) as never,
+    );
+
+    await expect(authService.resetPassword(
+      { email: user.email, code, newPassword: 'newsecret123' },
+      repository as never,
+      otpStore.store,
+    )).rejects.toBe(updateFailure);
+
+    expect(otpStore.completeCalls).toHaveBeenCalledOnce();
+    expect(await otpStore.store.getPasswordReset(user.id)).toBeDefined();
+  });
+
+  it('allows only one of two concurrent password resets to update the password', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const otpStore = createMemoryOtpStore();
+    const user = {
+      id: 'user_reset_concurrent',
+      accountId: 'account_reset_concurrent',
+      email: 'concurrent@example.com',
+      name: 'Reset Owner',
+      role: 'owner' as const,
+      locale: 'fr' as const,
+      accountStatus: 'active',
+      passwordHash: await hashPassword('supersecret123'),
+    };
+    let updateCount = 0;
+    const repository = {
+      findUserByEmail: vi.fn().mockResolvedValue(user),
+      updatePassword: vi.fn(async () => {
+        updateCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }),
+    };
+    let code = '';
+    await authService.requestPasswordReset(
+      { email: user.email },
+      repository as never,
+      otpStore.store,
+      (async (_sourceJobId: string, notification: { code: string }) => {
+        code = notification.code;
+      }) as never,
+    );
+
+    const results = await Promise.allSettled([
+      authService.resetPassword(
+        { email: user.email, code, newPassword: 'newsecret1234' },
+        repository as never,
+        otpStore.store,
+      ),
+      authService.resetPassword(
+        { email: user.email, code, newPassword: 'othersecret123' },
+        repository as never,
+        otpStore.store,
+      ),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: { status: 401, code: 'INVALID_OTP' },
+    });
+    expect(updateCount).toBe(1);
+  });
+
+  it('returns INVALID_OTP for unknown accounts and accounts without a reset challenge', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const otpStore = createMemoryOtpStore();
+    const repository = { findUserByEmail: vi.fn().mockResolvedValue(undefined) };
+
+    await expect(authService.resetPassword(
+      { email: 'unknown@example.com', code: '123456', newPassword: 'newsecret1234' },
+      repository as never,
+      otpStore.store,
+    )).rejects.toMatchObject({ status: 401, code: 'INVALID_OTP' });
+
+    const user = {
+      id: 'user_no_reset',
+      accountId: 'account_no_reset',
+      email: 'no-reset@example.com',
+      name: 'Owner',
+      role: 'owner' as const,
+      locale: 'fr' as const,
+      accountStatus: 'active',
+      passwordHash: await hashPassword('supersecret123'),
+    };
+    repository.findUserByEmail.mockResolvedValue(user);
+    await expect(authService.resetPassword(
+      { email: user.email, code: '123456', newPassword: 'newsecret1234' },
+      repository as never,
+      otpStore.store,
+    )).rejects.toMatchObject({ status: 401, code: 'INVALID_OTP' });
+  });
+
+  it('limits password reset verification to five atomic challenge attempts', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    const otpStore = createMemoryOtpStore();
+    const user = {
+      id: 'user_reset_attempt_limit',
+      accountId: 'account_reset_attempt_limit',
+      email: 'attempt-limit@example.com',
+      name: 'Reset Owner',
+      role: 'owner' as const,
+      locale: 'fr' as const,
+      accountStatus: 'active',
+      passwordHash: await hashPassword('supersecret123'),
+    };
+    const repository = {
+      findUserByEmail: vi.fn().mockResolvedValue(user),
+      updatePassword: vi.fn(),
+    };
+    const enqueueNotification = vi.fn(async (sourceJobId: string, notification: { code: string }) => {
+      expect(sourceJobId).toBeTruthy();
+      expect(notification.code).toMatch(/^\d{6}$/);
+    });
+    await authService.requestPasswordReset(
+      { email: user.email },
+      repository as never,
+      otpStore.store,
+      enqueueNotification as never,
+    );
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await expect(authService.resetPassword(
+        { email: user.email, code: '000000', newPassword: 'newsupersecret123' },
+        repository as never,
+        otpStore.store,
+      )).rejects.toMatchObject({ status: 401, code: 'INVALID_OTP' });
+    }
+
+    await expect(authService.resetPassword(
+      { email: user.email, code: '000000', newPassword: 'newsupersecret123' },
+      repository as never,
+      otpStore.store,
+    )).rejects.toMatchObject({ status: 429, code: 'OTP_ATTEMPTS_EXCEEDED' });
   });
 
   it('limits MFA challenge resends per user across replacement challenge tokens', async () => {
     process.env.STAGE = 'test';
     process.env.USE_DYNAMO_AUTH = 'false';
-    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const otpStore = createMemoryOtpStore();
     const repository = {
       findUserByEmail: async () => ({
         id: 'user_mfa_resend_limited',
@@ -135,27 +551,32 @@ describe('auth service repository flow', () => {
         mfaEnabled: true,
         passwordHash: await hashPassword('supersecret123'),
       }),
+      resetLoginFailures: vi.fn(),
     };
     const login = await authService.login(
       { email: 'mfa-resend@example.com', password: 'supersecret123' },
       repository as never,
+      otpStore.store,
+      async () => undefined,
     );
     if (!('mfaRequired' in login)) throw new Error('Expected an MFA challenge');
 
     let challengeToken = login.challengeToken;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const resent = await authService.resendMfaChallenge(challengeToken);
+      const resent = await authService.resendMfaChallenge(challengeToken, otpStore.store, async () => undefined);
       expect(resent.sent).toBe(true);
       // Issue another challenge for the same user to verify the shared account-level limit.
       const next = await authService.login(
         { email: 'mfa-resend@example.com', password: 'supersecret123' },
         repository as never,
+        otpStore.store,
+        async () => undefined,
       );
       if (!('mfaRequired' in next)) throw new Error('Expected an MFA challenge');
       challengeToken = next.challengeToken;
     }
 
-    await expect(authService.resendMfaChallenge(challengeToken)).rejects.toMatchObject({
+    await expect(authService.resendMfaChallenge(challengeToken, otpStore.store, async () => undefined)).rejects.toMatchObject({
       status: 429,
       code: 'RATE_LIMITED',
     });
@@ -163,7 +584,7 @@ describe('auth service repository flow', () => {
 
   it('rejects MFA completion if the account was disabled after the challenge was issued', async () => {
     process.env.USE_DYNAMO_AUTH = 'false';
-    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const otpStore = createMemoryOtpStore();
     const findUserByEmail = vi.fn()
       .mockResolvedValueOnce({
         id: 'user_mfa',
@@ -188,11 +609,13 @@ describe('auth service repository flow', () => {
         passwordHash: 'unused',
       });
     const createSession = vi.fn();
-    const repository = { findUserByEmail, createSession };
+    const repository = { findUserByEmail, createSession, resetLoginFailures: vi.fn() };
 
     const challenge = await authService.login(
       { email: 'owner@example.com', password: 'supersecret123' },
       repository as never,
+      otpStore.store,
+      async () => undefined,
     );
     if (!('mfaRequired' in challenge)) {
       throw new Error('Expected an MFA challenge');
@@ -200,8 +623,9 @@ describe('auth service repository flow', () => {
 
     await expect(
       authService.verifyMfa(
-        { challengeToken: challenge.challengeToken, code: '100000' },
+        { challengeToken: challenge.challengeToken, code: otpStore.codes.get(challenge.challengeToken)! },
         repository as never,
+        otpStore.store,
       ),
     ).rejects.toMatchObject({ status: 403, code: 'ACCOUNT_DISABLED' });
     expect(createSession).not.toHaveBeenCalled();

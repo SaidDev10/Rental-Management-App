@@ -10,6 +10,9 @@ const attachmentSchema = z.object({
   contentType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
   sizeBytes: z.number().int().positive().max(10 * 1024 * 1024),
 }).strict();
+const confirmAttachmentSchema = attachmentSchema.extend({
+  s3Key: z.string().min(1).max(1024),
+}).strict();
 
 export const createMaintenanceAttachmentRoutes = ({
   service = maintenanceAttachmentService,
@@ -36,6 +39,16 @@ export const createMaintenanceAttachmentRoutes = ({
     );
 
     return c.json({ data: result }, 200);
+  });
+
+  routes.post('/:id/attachments/confirm', zValidator('json', confirmAttachmentSchema), async (c) => {
+    const result = await service.confirm(
+      ownerAccountId(c),
+      c.req.param('id'),
+      c.req.valid('json'),
+    );
+
+    return c.json({ data: result }, 201);
   });
 
   routes.notFound((c) => c.json(

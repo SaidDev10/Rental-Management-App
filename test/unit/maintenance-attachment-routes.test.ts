@@ -74,4 +74,75 @@ describe('maintenance attachment routes', () => {
     expect(invalidResponse.status).toBe(400);
     expect(service.presign).not.toHaveBeenCalled();
   });
+
+  it('confirms an uploaded attachment using the owner claim and rejects malformed or oversized data', async () => {
+    const service = {
+      presign: vi.fn(),
+      confirm: vi.fn(async (_accountId, _ticketId, input) => ({
+        s3Key: input.s3Key,
+        mimeType: input.contentType,
+        sizeBytes: input.sizeBytes,
+      })),
+    } as unknown as MaintenanceAttachmentService;
+    const app = createApp(service);
+    const response = await app.request('/maintenance/tickets/ticket-1/attachments/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        s3Key: 'accounts/claim-account/documents/01JABCDEF0123456789ABCDEFG.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      data: {
+        s3Key: 'accounts/claim-account/documents/01JABCDEF0123456789ABCDEFG.jpg',
+        mimeType: 'image/jpeg',
+        sizeBytes: 1024,
+      },
+    });
+    expect(service.confirm).toHaveBeenCalledWith('claim-account', 'ticket-1', {
+      s3Key: 'accounts/claim-account/documents/01JABCDEF0123456789ABCDEFG.jpg',
+      contentType: 'image/jpeg',
+      sizeBytes: 1024,
+    });
+
+    const forbiddenResponse = await createApp(service, 'super_admin').request(
+      '/maintenance/tickets/ticket-1/attachments/confirm',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          s3Key: 'accounts/claim-account/documents/01JABCDEF0123456789ABCDEFG.jpg',
+          contentType: 'image/jpeg',
+          sizeBytes: 1024,
+        }),
+      },
+    );
+    const oversizedResponse = await app.request('/maintenance/tickets/ticket-1/attachments/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        s3Key: 'accounts/claim-account/documents/01JABCDEF0123456789ABCDEFG.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 10 * 1024 * 1024 + 1,
+      }),
+    });
+    const malformedResponse = await app.request('/maintenance/tickets/ticket-1/attachments/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        s3Key: 'accounts/claim-account/documents/01JABCDEF0123456789ABCDEFG.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 0,
+        unexpected: true,
+      }),
+    });
+    expect(forbiddenResponse.status).toBe(403);
+    expect(oversizedResponse.status).toBe(400);
+    expect(malformedResponse.status).toBe(400);
+    expect(service.confirm).toHaveBeenCalledTimes(1);
+  });
 });

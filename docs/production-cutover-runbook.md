@@ -6,13 +6,19 @@ AWS change. Before any production deployment or Terraform apply, obtain explicit
 approval from the service owner and follow the approved change window.
 
 > **Production readiness gate:** The current Terraform module provisions the
-> DynamoDB table and background workers/queues, but does not provision the API
-> Lambda/API Gateway, production CloudWatch alarms or an alarm notification
-> route. No production deployment pipeline or production endpoint is documented
-> here. Do not declare a production cutover or rely on alarm coverage until those
-> P9-T2 prerequisites are implemented, reviewed, and verified. If these
-> prerequisites remain absent, stop at the go/no-go gate and escalate to the
-> service owner. Do not infer a production URL, alarm recipient, or approval.
+> DynamoDB table and background workers/queues, and defines worker/DLQ,
+> DynamoDB-throttle, and Lambda-concurrency alarms routed to an SNS topic with
+> an optional email subscription. The user reports manually deploying resources
+> represented in Terraform state; the supplied state list includes the table,
+> workers/stream, queues, SNS topic, alarms, and aliases. This is user-reported
+> and has not been independently inspected. The list does not show the API
+> Lambda/API Gateway or an SNS email subscription. SNS subscription confirmation
+> and end-to-end notification delivery remain unverified. No production
+> deployment pipeline or production endpoint is documented here. Do not declare
+> a production cutover until P9-T2 gaps are implemented, reviewed, and verified.
+> If these prerequisites remain absent, stop at the go/no-go gate and escalate
+> to the service owner. Do not infer a production URL, alarm recipient, or
+> approval.
 
 ## 1. Roles and change record
 
@@ -112,13 +118,19 @@ The currently configured worker log groups use the name pattern
 Terraform defaults, worker queues have a four-day message retention period and
 DLQs have a fourteen-day retention period; workers retry failed messages up to
 three receives before redrive. These are configuration facts, not proof that
-alarms or alert routing exist. The current Terraform source has no CloudWatch
-metric-alarm resources or SNS/on-call alarm route. Treat missing alarm coverage
-as a no-go, not as a green signal.
+notifications are delivered. The user reports deploying the alarm resources
+listed in Terraform state. Terraform defines alarms for worker and stream
+Lambda errors, worker DLQ depth, DynamoDB throttles, and Lambda concurrency,
+routed through an SNS topic with an optional email subscription. API Gateway/API
+deployment and API-specific alarms are absent from the supplied state list.
+Production status is user-reported; subscription confirmation and notification
+delivery are unverified. Treat
+those gaps as a no-go, not as a green signal.
 
-Once P9-T2 provisions and verifies alarms, the on-call operator should review
-at least these signals (thresholds and notification destinations must be set by
-P9-T2/service owners; this runbook does not invent them):
+Once P9-T2 provisions and verifies the configured alarms and notification
+delivery, the on-call operator should review at least these signals. Thresholds
+and notification destinations for API-specific monitoring must be set by
+P9-T2/service owners; this runbook does not invent them:
 
 | Signal | Initial response |
 | --- | --- |

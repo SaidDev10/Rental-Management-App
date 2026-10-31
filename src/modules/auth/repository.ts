@@ -60,6 +60,8 @@ export type AuthRepository = {
     updatedAt?: string;
   }) => Promise<SessionRecord>;
   revokeSession: (userId: string, sessionId: string) => Promise<void>;
+  recordLoginFailure: (input: { userId: string; accountId: string }) => Promise<number>;
+  resetLoginFailures: (input: { userId: string; accountId: string }) => Promise<void>;
   updatePassword: (input: { userId: string; accountId: string; passwordHash: string }) => Promise<void>;
   revokeSessionAfterRefreshTokenReuse: (input: {
     userId: string;
@@ -362,6 +364,41 @@ const getLocalAuthRepository = (): AuthRepository => ({
 
     sessionsByUserId.set(userId, revokedSession);
     sessionsByRefreshHash.set(session.refreshTokenHash, revokedSession);
+  },
+
+  async recordLoginFailure({ userId, accountId }): Promise<number> {
+    const user = usersById.get(userId);
+    if (!user || user.accountId !== accountId) {
+      throw new Error('Cannot record a failed login for a missing account user.');
+    }
+
+    const failedLoginAttempts = (user.failedLoginAttempts ?? 0) + 1;
+    const nextUser: AuthUserRecord = {
+      ...user,
+      failedLoginAttempts,
+      lockedUntil: failedLoginAttempts >= 5
+        ? new Date(Date.now() + 15 * 60 * 1000).toISOString()
+        : user.lockedUntil ?? null,
+    };
+    usersById.set(userId, nextUser);
+    usersByEmail.set(normalizeEmail(user.email), nextUser);
+
+    return failedLoginAttempts;
+  },
+
+  async resetLoginFailures({ userId, accountId }): Promise<void> {
+    const user = usersById.get(userId);
+    if (!user || user.accountId !== accountId) {
+      throw new Error('Cannot reset login failures for a missing account user.');
+    }
+
+    const nextUser: AuthUserRecord = {
+      ...user,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    };
+    usersById.set(userId, nextUser);
+    usersByEmail.set(normalizeEmail(user.email), nextUser);
   },
 
   async updatePassword({ userId, accountId, passwordHash }): Promise<void> {
@@ -832,6 +869,81 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
           ':revokedAt': now,
           ':updatedAt': now,
           ':sessionId': sessionId,
+        },
+      }),
+    );
+  },
+
+  async recordLoginFailure({ userId, accountId }) {
+    const shouldUseDynamoAuth = usesDynamoAuth();
+
+    if (!shouldUseDynamoAuth) {
+      return getLocalAuthRepository().recordLoginFailure({ userId, accountId });
+    }
+
+    const tableName = getAuthTableName();
+    const now = new Date();
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { PK: pk.account(accountId), SK: sk.user(userId) },
+        UpdateExpression: 'SET failedLoginAttempts = if_not_exists(failedLoginAttempts, :zero) + :one, updatedAt = :now',
+        ConditionExpression: 'attribute_exists(PK) AND accountId = :accountId',
+        ExpressionAttributeValues: {
+          ':zero': 0,
+          ':one': 1,
+          ':now': now.toISOString(),
+          ':accountId': accountId,
+        },
+        ReturnValues: 'ALL_NEW',
+      }),
+    );
+    const failedLoginAttempts = Number(result.Attributes?.failedLoginAttempts);
+
+    if (!Number.isInteger(failedLoginAttempts) || failedLoginAttempts < 1) {
+      throw new Error('DynamoDB did not return the updated login failure count.');
+    }
+
+    if (failedLoginAttempts >= 5) {
+      await client.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { PK: pk.account(accountId), SK: sk.user(userId) },
+          UpdateExpression: 'SET lockedUntil = :lockedUntil, updatedAt = :now',
+          ConditionExpression: 'attribute_exists(PK) AND accountId = :accountId AND failedLoginAttempts >= :threshold',
+          ExpressionAttributeValues: {
+            ':lockedUntil': new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
+            ':now': now.toISOString(),
+            ':accountId': accountId,
+            ':threshold': 5,
+          },
+        }),
+      );
+    }
+
+    return failedLoginAttempts;
+  },
+
+  async resetLoginFailures({ userId, accountId }) {
+    const shouldUseDynamoAuth = usesDynamoAuth();
+
+    if (!shouldUseDynamoAuth) {
+      return getLocalAuthRepository().resetLoginFailures({ userId, accountId });
+    }
+
+    const tableName = getAuthTableName();
+    const now = new Date().toISOString();
+    await client.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { PK: pk.account(accountId), SK: sk.user(userId) },
+        UpdateExpression: 'SET failedLoginAttempts = :zero, lockedUntil = :null, updatedAt = :now',
+        ConditionExpression: 'attribute_exists(PK) AND accountId = :accountId',
+        ExpressionAttributeValues: {
+          ':zero': 0,
+          ':null': null,
+          ':now': now,
+          ':accountId': accountId,
         },
       }),
     );

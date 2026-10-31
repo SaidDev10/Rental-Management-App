@@ -28,9 +28,9 @@ const passwordForgotSchema = z.object({
 });
 
 const passwordResetSchema = z.object({
-  challengeToken: z.string().min(1),
+  email: z.email(),
   code: z.string().min(4).max(6),
-  password: z.string().min(8),
+  newPassword: z.string().min(12),
 });
 
 const registerSchema = z.object({
@@ -177,9 +177,9 @@ authRoutes.post(
   zValidator('json', passwordResetSchema),
   async (c) => {
     const payload = c.req.valid('json');
-    const result = await authService.resetPassword(payload);
+    await authService.resetPassword(payload);
 
-    return c.json(result, 200);
+    return c.body(null, 204);
   },
 );
 

@@ -82,6 +82,25 @@ describe('document storage', () => {
     });
   });
 
+  it('rejects confirmation when the uploaded S3 object does not exist', async () => {
+    const storage = createDocumentStorage({
+      client: clientMock as unknown as S3Client,
+      bucketName: 'documents-test',
+      signUrl: vi.fn(async () => 'url') as never,
+    });
+    const { s3Key } = await storage.presignUpload('account-1', 'image/jpeg', 123);
+    const id = s3Key.split('/').at(-1)!.slice(0, 26);
+    clientMock.on(HeadObjectCommand).rejects(Object.assign(new Error('missing'), {
+      name: 'NotFound',
+      $metadata: { httpStatusCode: 404 },
+    }));
+
+    await expect(storage.verifyUpload('account-1', id, s3Key, 'image/jpeg', 123)).rejects.toMatchObject({
+      code: 'DOCUMENT_UPLOAD_NOT_FOUND',
+      status: 400,
+    });
+  });
+
   it('presigns a five-minute attachment download with a sanitized filename', async () => {
     const signUrl = vi.fn(async (_client: S3Client, command: GetObjectCommand, options: { expiresIn: number }) => {
       expect(command.input.ResponseContentDisposition).toMatch(/^attachment; filename="document-[A-Za-z0-9._-]+\.webp"$/);
