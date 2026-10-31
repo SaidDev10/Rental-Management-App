@@ -5,7 +5,7 @@ import puppeteer, { type Browser } from 'puppeteer-core';
 // eslint-disable-next-line import/extensions -- pdfjs-dist only exposes the legacy ESM build file.
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
-import { closeBrowser, getBrowser } from '../../src/shared/pdf/browser';
+import { closeBrowser, getPdfBrowser } from '../../src/shared/pdf/browser';
 import { renderPdfHtml } from '../../src/workers/processors/pdf-documents';
 
 const arabicFixture = 'السلام عليكم';
@@ -51,7 +51,7 @@ describe('Arabic PDF rendering', () => {
         headless: true,
       });
     } else {
-      testBrowser = await getBrowser();
+      testBrowser = await getPdfBrowser();
       usingSharedBrowser = true;
     }
 

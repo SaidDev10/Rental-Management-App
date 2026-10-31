@@ -35,7 +35,7 @@ jobs:
           name: Install Chromium runtime libraries
           command: |
             sudo apt-get update
-            sudo apt-get install -y libnspr4 libnss3
+            sudo apt-get install -y fontconfig libfontconfig1 libnspr4 libnss3
       - run:
           name: Unit tests
           command: pnpm test

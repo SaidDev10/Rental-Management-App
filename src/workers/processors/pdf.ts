@@ -3,7 +3,7 @@ import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { readPdfWorkerConfig } from '../../shared/config';
 import { getS3Client } from '../../shared/aws/clients';
 import { pk, sk } from '../../shared/db/keys';
-import { getBrowser } from '../../shared/pdf/browser';
+import { getPdfBrowser } from '../../shared/pdf/browser';
 import { enqueueNotification } from '../../shared/sqs/enqueue-notification';
 import type { JobCompletion } from '../job-repository';
 import type { PdfJobPayload } from '../payloads';
@@ -12,7 +12,7 @@ import { buildPdfContext, renderPdfHtml, type RenderContext } from './pdf-docume
 export { formatMoney } from './pdf-documents';
 
 const renderPdf = async (context: RenderContext): Promise<Uint8Array> => {
-  const browser = await getBrowser();
+  const browser = await getPdfBrowser();
   const page = await browser.newPage();
 
   try {
