@@ -32,6 +32,11 @@ jobs:
           name: Lint
           command: pnpm lint
       - run:
+          name: Install Chromium runtime libraries
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y libnspr4 libnss3
+      - run:
           name: Unit tests
           command: pnpm test
       - run:
