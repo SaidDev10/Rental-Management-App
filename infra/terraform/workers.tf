@@ -5,7 +5,7 @@ locals {
   worker_specs = {
     pdf = {
       name              = "pdf-worker"
-      runtime           = "nodejs22.x"
+      runtime           = "nodejs26.x"
       handler           = "pdf-worker.handler"
       artifact          = var.pdf_worker_zip_path
       timeout           = 60
@@ -16,7 +16,7 @@ locals {
     }
     report = {
       name              = "report-worker"
-      runtime           = "nodejs22.x"
+      runtime           = "nodejs26.x"
       handler           = "report-worker.handler"
       artifact          = var.report_worker_zip_path
       timeout           = 120
@@ -27,7 +27,7 @@ locals {
     }
     notification = {
       name              = "notification-worker"
-      runtime           = "nodejs22.x"
+      runtime           = "nodejs26.x"
       handler           = "notification-worker.handler"
       artifact          = var.notification_worker_zip_path
       timeout           = 30
@@ -399,7 +399,7 @@ resource "aws_lambda_function" "stream_aggregator" {
   s3_key                         = aws_s3_object.stream_aggregator_artifact.key
   source_code_hash               = filebase64sha256(var.stream_aggregator_zip_path)
   publish                        = true
-  runtime                        = "nodejs22.x"
+  runtime                        = "nodejs26.x"
   handler                        = "stream-aggregator.handler"
   timeout                        = 30
   memory_size                    = 512
@@ -446,5 +446,4 @@ resource "aws_lambda_event_source_mapping" "stream_aggregator" {
 
   depends_on = [aws_iam_role_policy.stream_aggregator, aws_cloudwatch_log_group.stream_aggregator]
 }
-
 

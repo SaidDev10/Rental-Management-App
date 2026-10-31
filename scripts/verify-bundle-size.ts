@@ -1,4 +1,4 @@
-import { readdir, stat } from 'node:fs/promises';
+import { access, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const limitsInMegabytes: Record<string, number> = {
@@ -43,4 +43,22 @@ for (const [artifactName, limitInMegabytes] of Object.entries(limitsInMegabytes)
   process.stdout.write(
     `${artifactName}: ${(sizeInBytes / 1024 / 1024).toFixed(1)} MB / ${limitInMegabytes} MB\n`,
   );
+}
+
+const argon2Binding = path.resolve(
+  'dist',
+  'api-handler',
+  'node_modules',
+  '@node-rs',
+  'argon2',
+  'node_modules',
+  '@node-rs',
+  'argon2-linux-x64-gnu',
+  'argon2.linux-x64-gnu.node',
+);
+
+try {
+  await access(argon2Binding);
+} catch {
+  throw new Error(`The API Lambda artifact is missing the Linux x64 Argon2 binding: ${argon2Binding}`);
 }

@@ -5,6 +5,22 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_apigatewayv2_api" {
+    defaults = {
+      api_endpoint  = "https://mock-api.execute-api.eu-north-1.amazonaws.com"
+      execution_arn = "arn:aws:execute-api:eu-north-1:123456789012:mock-api"
+      id            = "mock-api"
+    }
+  }
+
+  mock_resource "aws_dynamodb_table" {
+    defaults = {
+      arn        = "arn:aws:dynamodb:eu-north-1:123456789012:table/mock-table"
+      name       = "mock-table"
+      stream_arn = "arn:aws:dynamodb:eu-north-1:123456789012:table/mock-table/stream/mock-stream"
+    }
+  }
+
   mock_resource "aws_sns_topic" {
     defaults = {
       arn = "arn:aws:sns:eu-north-1:123456789012:mock-alarms"
@@ -14,6 +30,7 @@ mock_provider "aws" {
   mock_resource "aws_sqs_queue" {
     defaults = {
       arn = "arn:aws:sqs:eu-north-1:123456789012:mock-queue"
+      id  = "https://sqs.eu-north-1.amazonaws.com/123456789012/mock-queue"
     }
   }
 }
@@ -22,7 +39,8 @@ run "worker_queue_and_mapping_configuration" {
   command = apply
 
   variables {
-    stage = "dev"
+    stage           = "dev"
+    allowed_origins = ["https://dev.example.test"]
   }
 
   assert {
@@ -59,6 +77,7 @@ run "worker_queue_and_mapping_configuration" {
   assert {
     condition = alltrue([
       for key in keys(local.worker_specs) :
+      aws_lambda_function.worker[key].runtime == "nodejs26.x" &&
       jsondecode(aws_iam_role_policy.worker_common[key].policy).Statement[2].Resource == aws_sqs_queue.worker[key].arn &&
       contains(jsondecode(aws_iam_role_policy.worker_common[key].policy).Statement[2].Action, "sqs:ReceiveMessage") &&
       contains(jsondecode(aws_iam_role_policy.worker_common[key].policy).Statement[2].Action, "sqs:DeleteMessage")
@@ -71,7 +90,8 @@ run "stream_aggregator_configuration" {
   command = apply
 
   variables {
-    stage = "dev"
+    stage           = "dev"
+    allowed_origins = ["https://dev.example.test"]
   }
 
   assert {
@@ -120,12 +140,14 @@ run "production_alarms_and_rollback_aliases" {
   command = apply
 
   variables {
-    stage       = "prod"
-    alarm_email = "on-call@example.com"
+    stage           = "prod"
+    alarm_email     = "on-call@example.com"
+    allowed_origins = ["https://app.example.test"]
   }
 
   assert {
     condition = (
+      aws_lambda_function.stream_aggregator.runtime == "nodejs26.x" &&
       length(aws_cloudwatch_metric_alarm.dlq_depth) == 4 &&
       aws_cloudwatch_metric_alarm.dlq_depth["pdf"].metric_name == "ApproximateNumberOfMessagesVisible" &&
       aws_cloudwatch_metric_alarm.dlq_depth["pdf"].threshold == 1 &&
@@ -150,9 +172,11 @@ run "production_alarms_and_rollback_aliases" {
 
   assert {
     condition = (
-      length(aws_cloudwatch_metric_alarm.lambda_errors) == 4 &&
+      length(aws_cloudwatch_metric_alarm.lambda_errors) == 6 &&
       aws_cloudwatch_metric_alarm.dynamodb_throttles.threshold == 1 &&
       aws_cloudwatch_metric_alarm.lambda_concurrency.threshold == var.lambda_concurrency_alarm_threshold &&
+      aws_cloudwatch_metric_alarm.api_gateway_5xx.metric_name == "5xx" &&
+      aws_cloudwatch_metric_alarm.api_integration_latency.extended_statistic == "p99" &&
       aws_sns_topic_subscription.alarm_email[0].endpoint == var.alarm_email
     )
     error_message = "Production error, throttle, concurrency, and email-notification alarms must be configured."
@@ -163,8 +187,9 @@ run "production_requires_alarm_contact" {
   command = plan
 
   variables {
-    stage       = "prod"
-    alarm_email = ""
+    stage           = "prod"
+    alarm_email     = ""
+    allowed_origins = ["https://app.example.test"]
   }
 
   expect_failures = [var.alarm_email]

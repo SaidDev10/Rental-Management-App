@@ -24,6 +24,10 @@ const externals: Partial<Record<ArtifactName, string[]>> = {
   'report-worker': ['@sparticuz/chromium'],
 };
 
+const requiredOptionalDependencies: Record<string, string[]> = {
+  '@node-rs/argon2': ['@node-rs/argon2-linux-x64-gnu'],
+};
+
 const resolvePackageDirectory = (packageName: string, fromDirectory: string): string => {
   const resolvedEntry = createRequire(path.join(fromDirectory, 'package.json')).resolve(packageName);
   let currentDirectory = path.dirname(resolvedEntry);
@@ -52,6 +56,7 @@ const copyRuntimePackage = (
   fromDirectory: string,
   destinationDirectory: string,
   visited: Set<string>,
+  requiredDependencies: Record<string, string[]> = {},
 ): void => {
   const sourceDirectory = resolvePackageDirectory(packageName, fromDirectory);
 
@@ -77,16 +82,25 @@ const copyRuntimePackage = (
   for (const dependencyName of Object.keys(manifest.dependencies ?? {})) {
     const dependencyDirectory = path.join(destinationDirectory, 'node_modules', dependencyName);
 
-    copyRuntimePackage(dependencyName, sourceDirectory, dependencyDirectory, visited);
+    copyRuntimePackage(dependencyName, sourceDirectory, dependencyDirectory, visited, requiredDependencies);
   }
 
-  for (const dependencyName of Object.keys(manifest.optionalDependencies ?? {})) {
+  const requiredOptionalDependencies = requiredDependencies[packageName] ?? [];
+  const optionalDependencies = requiredOptionalDependencies.length > 0
+    ? requiredOptionalDependencies
+    : Object.keys(manifest.optionalDependencies ?? {});
+
+  for (const dependencyName of optionalDependencies) {
     try {
       const dependencyDirectory = path.join(destinationDirectory, 'node_modules', dependencyName);
 
-      copyRuntimePackage(dependencyName, sourceDirectory, dependencyDirectory, visited);
+      copyRuntimePackage(dependencyName, sourceDirectory, dependencyDirectory, visited, requiredDependencies);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Cannot find module')) {
+      if (
+        !requiredOptionalDependencies.includes(dependencyName) &&
+        error instanceof Error &&
+        error.message.startsWith('Cannot find module')
+      ) {
         continue;
       }
 
@@ -125,7 +139,7 @@ const buildArtifact = async (artifactName: ArtifactName): Promise<void> => {
   for (const packageName of externals[artifactName] ?? []) {
     const packageDirectory = path.join(outputDirectory, 'node_modules', packageName);
 
-    copyRuntimePackage(packageName, root, packageDirectory, new Set());
+    copyRuntimePackage(packageName, root, packageDirectory, new Set(), requiredOptionalDependencies);
   }
 
   if (artifactName === 'pdf-worker') {

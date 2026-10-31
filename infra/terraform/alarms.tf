@@ -22,6 +22,8 @@ locals {
   }
   alarm_lambda_names = merge(local.lambda_function_names, {
     stream_aggregator = aws_lambda_function.stream_aggregator.function_name
+    api_handler       = aws_lambda_function.api["api_handler"].function_name
+    authorizer        = aws_lambda_function.api["authorizer"].function_name
   })
 }
 
@@ -95,4 +97,42 @@ resource "aws_cloudwatch_metric_alarm" "lambda_concurrency" {
   threshold           = var.lambda_concurrency_alarm_threshold
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_gateway_5xx" {
+  alarm_name          = "${var.stage}-api-gateway-5xx"
+  alarm_description   = "The HTTP API returned one or more server errors in the five-minute evaluation period."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "5xx"
+  namespace           = "AWS/ApiGateway"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+
+  dimensions = {
+    ApiId = aws_apigatewayv2_api.http.id
+    Stage = aws_apigatewayv2_stage.default.name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_integration_latency" {
+  alarm_name          = "${var.stage}-api-integration-latency-p99"
+  alarm_description   = "The HTTP API Lambda integration p99 latency reached one second."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  extended_statistic  = "p99"
+  metric_name         = "IntegrationLatency"
+  namespace           = "AWS/ApiGateway"
+  period              = 300
+  threshold           = 1000
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+
+  dimensions = {
+    ApiId = aws_apigatewayv2_api.http.id
+    Stage = aws_apigatewayv2_stage.default.name
+  }
 }

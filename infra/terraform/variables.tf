@@ -25,8 +25,15 @@ variable "lambda_artifacts_bucket_name" {
   type        = string
   default     = "rental-management-artifacts"
 }
+
 variable "documents_bucket_name" {
   description = "Existing S3 bucket used by PDF/report workers and notification document links."
+  type        = string
+  default     = "rental-management-documents"
+}
+
+variable "photos_bucket_name" {
+  description = "Existing S3 bucket used by the API to store property photos."
   type        = string
   default     = "rental-management-documents"
 }
@@ -35,6 +42,26 @@ variable "ssm_param_prefix" {
   description = "SSM path prefix for worker secrets; defaults to /<table_name>/<stage>."
   type        = string
   default     = ""
+}
+
+variable "allowed_origins" {
+  description = "Exact browser origins allowed by API Gateway and the API Lambda."
+  type        = list(string)
+
+  validation {
+    condition = (
+      length(var.allowed_origins) > 0 &&
+      alltrue([
+        for origin in var.allowed_origins :
+        origin == trimspace(origin) &&
+        !strcontains(origin, "*") &&
+        !strcontains(origin, ",") &&
+        can(regex("^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$", origin))
+      ]) &&
+      (var.stage != "prod" || alltrue([for origin in var.allowed_origins : startswith(origin, "https://")]))
+    )
+    error_message = "allowed_origins must contain exact HTTP(S) origins without paths or wildcards; production origins must use HTTPS."
+  }
 }
 
 variable "ses_from_address" {
@@ -59,6 +86,18 @@ variable "pdf_worker_zip_path" {
   description = "Path to the built PDF worker Lambda ZIP, relative to the Terraform module."
   type        = string
   default     = "../../dist/pdf-worker.zip"
+}
+
+variable "api_handler_zip_path" {
+  description = "Path to the built API handler Lambda ZIP, relative to the Terraform module."
+  type        = string
+  default     = "../../dist/api-handler.zip"
+}
+
+variable "authorizer_zip_path" {
+  description = "Path to the built Lambda authorizer ZIP, relative to the Terraform module."
+  type        = string
+  default     = "../../dist/authorizer.zip"
 }
 
 variable "report_worker_zip_path" {

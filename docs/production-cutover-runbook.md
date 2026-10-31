@@ -15,7 +15,9 @@ approval from the service owner and follow the approved change window.
 > Lambda/API Gateway or an SNS email subscription. SNS subscription confirmation
 > and end-to-end notification delivery remain unverified. No production
 > deployment pipeline or production endpoint is documented here. Do not declare
-> a production cutover until P9-T2 gaps are implemented, reviewed, and verified.
+> a production cutover until the P9-T2 production alarm/notification gaps and
+> P9-T6/P9-T7 API implementation/deployment gaps are implemented, reviewed, and
+> verified.
 > If these prerequisites remain absent, stop at the go/no-go gate and escalate
 > to the service owner. Do not infer a production URL, alarm recipient, or
 > approval.
@@ -44,9 +46,12 @@ secrets into shell history, chat, logs, or this repository.
 
 1. Confirm a change ticket, owner, independent reviewer, staffed monitoring
    window, and a tested contact/escalation route. Freeze unrelated changes.
-2. Confirm P9-T2 has delivered the API deployment path, production alarms and
-   notification routing, and an approved deployment/rollback procedure. Confirm
-   the alert thresholds and owners are known. **If any is missing, no-go.**
+2. Confirm P9-T6 has delivered the API Lambda, authorizer, API Gateway HTTP API,
+   routes, throttling, and API operational controls; confirm P9-T7's approved
+   deployment and verification is complete for the target stage. Confirm P9-T2
+   production alarms, notification routing, and the approved deployment/rollback
+   procedure are also verified, including alert thresholds and owners.
+   **If any is missing, no-go.**
 3. Review the release diff and existing CI/local checks. Build the artifacts
    required by the approved release from the recorded commit; for all configured
    artifacts, the repository command is `pnpm run build`. Record artifact hashes
@@ -194,8 +199,10 @@ smoke check passed. Attach sanitized evidence and list remaining risks/tasks.
 This runbook is written against the repository configuration inspected for P9-T3.
 It is not an exercise report: no production endpoint, alarms, alarm destination,
 API deployment resource, or complete production rollout mechanism is present in
-the inspected Terraform/docs. P9-T2 must add and independently verify those
-prerequisites. A real operational exercise, production smoke test, alarm drill,
-rollback, or cutover remains blocked until the service owner supplies the
-production details and separately authorizes the required actions. No AWS
-mutation or deployment was performed while writing this document.
+the inspected Terraform/docs. P9-T6 must add and validate the API infrastructure;
+P9-T7 must deploy and independently verify it after explicit approval. P9-T2
+continues to track the non-API production infrastructure and alarm/notification
+gaps. A real operational exercise, production smoke test, alarm drill, rollback,
+or cutover remains blocked until the service owner supplies the production
+details and separately authorizes the required actions. No AWS mutation or
+deployment was performed while writing this document.
