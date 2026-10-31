@@ -15,6 +15,7 @@ export type AccessTokenClaims = {
   jti: string;
   iss: 'rental-app';
   aud: 'rental-app-api';
+  imp?: boolean;
 };
 
 let cachedKeyPair: { privateKey: ReturnType<typeof createPrivateKey>; publicKey: ReturnType<typeof createPublicKey> } | null = null;
@@ -117,4 +118,32 @@ export const verifyAccessToken = async (token: string): Promise<AccessTokenClaim
   });
 
   return payload as AccessTokenClaims;
+};
+
+
+export const signImpersonationToken = async (input: {
+  userId: string;
+  accountId: string;
+  email: string;
+  sessionId: string;
+}): Promise<string> => {
+  const { privateKey } = await getKeyPair();
+  const now = Math.floor(Date.now() / 1000);
+
+  return new SignJWT({
+    sub: input.userId,
+    account_id: input.accountId,
+    role: 'owner',
+    email: input.email,
+    sid: input.sessionId,
+    imp: true,
+  })
+    .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
+    .setIssuedAt(now)
+    .setIssuer('rental-app')
+    .setAudience('rental-app-api')
+    .setSubject(input.userId)
+    .setExpirationTime(now + 30 * 60)
+    .setJti(randomUUID())
+    .sign(privateKey);
 };

@@ -72,3 +72,9 @@ variable "notification_worker_zip_path" {
   type        = string
   default     = "../../dist/notification-worker.zip"
 }
+
+variable "stream_aggregator_zip_path" {
+  description = "Path to the built DynamoDB stream aggregator Lambda ZIP, relative to the Terraform module."
+  type        = string
+  default     = "../../dist/stream-aggregator.zip"
+}

@@ -138,6 +138,53 @@ describe('stream summary aggregation', () => {
     expect(dynamoMock.commandCalls(GetCommand)[0]?.args[0].input.ConsistentRead).toBe(true);
   });
 
+  it('does not apply the same event delta twice when a delivery is replayed', async () => {
+    const processedEventIds = new Set<string>();
+    let appliedIncome = 0;
+    dynamoMock.on(TransactWriteCommand).callsFake(async ({ TransactItems }) => {
+      const marker = TransactItems?.[0]?.Put?.Item;
+      const eventId = String(marker?.eventId);
+
+      if (processedEventIds.has(eventId)) {
+        throw Object.assign(new Error('conditional transaction cancelled'), {
+          name: 'TransactionCanceledException',
+        });
+      }
+
+      processedEventIds.add(eventId);
+      appliedIncome += Number(
+        TransactItems?.[1]?.Update?.ExpressionAttributeValues?.[':totalIncome'] ?? 0,
+      );
+
+      return {};
+    });
+    dynamoMock.on(GetCommand).callsFake(async ({ Key }) => {
+      const eventId = String(Key?.SK).replace('PROCESSED#', '');
+
+      return processedEventIds.has(eventId)
+        ? { Item: { PK: Key?.PK, SK: Key?.SK } }
+        : {};
+    });
+
+    const processRecord = createStreamRecordProcessor('rental-table');
+    const replay = {
+      ...record('event-replayed', undefined, paymentImage({
+        periodStart: '2025-01-10',
+        amountPaid: 125,
+        status: 'paid',
+      })),
+      eventName: 'INSERT' as const,
+    };
+
+    await processRecord(replay);
+    await processRecord(replay);
+
+    expect(dynamoMock.commandCalls(TransactWriteCommand)).toHaveLength(2);
+    expect(processedEventIds).toEqual(new Set(['event-replayed']));
+    expect(appliedIncome).toBe(125);
+    expect(dynamoMock.commandCalls(GetCommand)).toHaveLength(1);
+  });
+
   it('skips unrelated entities without writing an aggregation event', async () => {
     const apply = vi.fn(async () => undefined);
     const processRecord = createStreamRecordProcessor('rental-table', apply);

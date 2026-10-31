@@ -3,6 +3,8 @@ import { getWorkerData, type WorkerEntity } from '../../shared/db/worker-data';
 import type { PdfJobPayload } from '../payloads';
 import { NonRetryableWorkerError } from '../job-processor';
 import Handlebars from 'handlebars';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 export type RenderContext = {
   title: string;
@@ -37,8 +39,27 @@ const labels: Record<'fr' | 'en', Record<LabelKey, string>> = {
     inspection: 'Inspection checklist', condition: 'Condition observed', notes: 'Observations', signature: 'Signatures',
   },
 };
+const fontFiles = [
+  { family: 'Inter', file: 'Inter-Variable.ttf', weight: '100 900' },
+  { family: 'Noto Sans', file: 'NotoSans-Variable.ttf', weight: '100 900' },
+  { family: 'Noto Naskh Arabic', file: 'NotoNaskhArabic-Variable.ttf', weight: '400 700' },
+] as const;
+let cachedFontFaces: string | undefined;
+const getFontFaces = (): string => {
+  if (cachedFontFaces) return cachedFontFaces;
+
+  const assetRoot = process.env.LAMBDA_TASK_ROOT ?? process.cwd();
+  cachedFontFaces = fontFiles.map(({ family, file, weight }) => {
+    const font = readFileSync(path.join(assetRoot, 'assets', 'fonts', file)).toString('base64');
+
+    return `@font-face { font-family: '${family}'; font-style: normal; font-weight: ${weight}; font-display: block; src: url(data:font/ttf;base64,${font}) format('truetype'); }`;
+  }).join('\n');
+
+  return cachedFontFaces;
+};
 const htmlTemplate = Handlebars.compile(`<!doctype html><html lang="{{locale}}"><head><meta charset="utf-8"><style>
-@page { size: A4; margin: 22mm 18mm; } body { color:#202a35; font:12px Arial,sans-serif; }
+{{{fontFaces}}}
+@page { size: A4; margin: 22mm 18mm; } body { color:#202a35; font:12px Inter,"Noto Naskh Arabic","Noto Sans",sans-serif; }
 h1 { border-bottom:2px solid #2563eb; padding-bottom:12px; } h2 { color:#334155; font-size:14px; margin-top:24px; }
 .meta { color:#64748b; font-size:10px; } .row { display:flex; border-bottom:1px solid #e2e8f0; padding:7px 0; break-inside:avoid; }
 .label { color:#64748b; width:38%; } .value { font-weight:600; }
@@ -128,4 +149,5 @@ export const buildPdfContext = async (payload: PdfJobPayload, now: Date, load: L
 
 export const renderPdfHtml = (context: RenderContext): string => htmlTemplate({
   ...context, generatedLabel: labels[context.locale].generated,
+  fontFaces: getFontFaces(),
 });

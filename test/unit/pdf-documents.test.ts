@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { sk } from '../../src/shared/db/keys';
 import type { WorkerEntity } from '../../src/shared/db/worker-data';
@@ -69,4 +71,33 @@ describe('PDF document payloads and rendered HTML', () => {
     expect(output).toContain('Appartement Centre');
     expect(output).toContain('1375.00 MAD');
     expect(output).toContain('2026-10-01 – 2026-10-31');
-  });});
+  });
+
+  it('inlines the bundled, licensed fonts in the PDF template CSS', () => {
+    const html = renderPdfHtml({
+      title: 'Arabic PDF font check',
+      locale: 'fr',
+      documentType: 'LEASE',
+      generatedAt: now.toISOString(),
+      sections: [],
+    });
+    const expectedFonts = [
+      { family: 'Inter', file: 'Inter-Variable.ttf' },
+      { family: 'Noto Sans', file: 'NotoSans-Variable.ttf' },
+      { family: 'Noto Naskh Arabic', file: 'NotoNaskhArabic-Variable.ttf' },
+    ];
+
+    for (const { family, file } of expectedFonts) {
+      const fontData = readFileSync(path.join(process.cwd(), 'assets', 'fonts', file)).toString('base64');
+
+      expect(html).toContain(`font-family: '${family}'`);
+      expect(html).toContain(`url(data:font/ttf;base64,${fontData})`);
+    }
+
+    expect(html).toContain('font:12px Inter,"Noto Naskh Arabic","Noto Sans",sans-serif');
+    for (const license of ['OFL-Inter.txt', 'OFL-NotoSans.txt', 'OFL-NotoNaskhArabic.txt']) {
+      expect(readFileSync(path.join(process.cwd(), 'assets', 'fonts', license), 'utf8'))
+        .toContain('SIL Open Font License, Version 1.1');
+    }
+  });
+});

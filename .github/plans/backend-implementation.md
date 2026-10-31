@@ -118,6 +118,7 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - [x] Provision and configure the queues, DLQs, event-source mappings, templates, and IAM permissions.
 - [x] Exercise the complete SQS-to-worker-to-document flow against AWS-compatible integration services. (User-reported dev verification, 2026-10-28.)
 - [x] Meet the phase exit criteria: `POST /payments/:id/quittance` produces a quittance and passes idempotency tests. (User-reported dev verification, 2026-10-28.)
+- [ ] Wire the overdue-payment processor to its scheduled EventBridge invocation.
 
 ### Verification snapshot
 - Provisioned stage-named PDF, report, and notification queues with managed SSE, four-day retention, receive-count-3 DLQs, restrictive redrive allow policies, and worker event-source mappings configured for partial batch failures.
@@ -127,32 +128,40 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** stream aggregator, summary items, dashboard and summary-report APIs.
 
-**Status: In progress — stream processor exists; API and measured performance are outstanding**
+**Status: In progress — stream processor and summary APIs implemented; replay/performance remain**
 
 - [x] Add transactional event deduplication and account-scoped summary deltas.
 - [x] Handle payment period changes by reversing the old month and applying the new month in one transaction.
 - [x] Add unit tests for duplicate events, period changes, account-scoped summary keys, and unsupported entities.
-- [ ] Provision and connect DynamoDB Streams with the specified images, retries, and failure destination.
-- [ ] Add `/dashboard` and `/reports/summary` endpoints using the summary items.
+- [x] Provision and connect DynamoDB Streams with the specified images, retries, and failure destination.
+- [x] Add `/dashboard` and `/reports/summary` endpoints using the summary items.
 - [ ] Add replay/integration coverage and measure dashboard p95.
 - [ ] Meet the phase exit criteria: replay idempotency passes and dashboard p95 is measured.
+
+### Verification snapshot
+- Provisioned the active-stage table stream consumer with `NEW_AND_OLD_IMAGES`, an encrypted stream DLQ, a least-privilege Lambda role, and an event-source mapping configured for batch size 100, bisection, three retries, partial batch failures, and parallelization factor 1. `terraform fmt -check infra/terraform`, `terraform -chdir=infra/terraform validate`, and mocked `terraform -chdir=infra/terraform test` passed (2 runs). No Terraform apply, AWS mutation, or deployment was performed.
+- Added owner-authenticated `/dashboard` and `/reports/summary` routes backed by account-scoped `SUMMARY#` GetItem access. Validation passed: `pnpm exec vitest run test/unit/dashboard-repository.test.ts test/unit/dashboard-service.test.ts test/unit/dashboard-routes.test.ts test/unit/app.test.ts --reporter=dot` (4 files, 29 tests), targeted ESLint, `pnpm typecheck`, source-only TypeScript check, and scoped `git diff --check`. No AWS resources were changed.
+- Added stateful mocked replay coverage and a DynamoDB Local integration test that replays a stream record through the actual processor, checks the single summary delta and processed marker, then reads the summary through the dashboard repository. The local integration case was skipped because Docker/DynamoDB Local is unavailable (`127.0.0.1:8000` refused connection); no AWS endpoint was contacted. A warm route benchmark ran 50 warm-ups plus 500 sequential samples and measured nearest-rank p95 `0.83 ms` on Node.js `v24.13.1`, Windows `10.0.26200` x64. DynamoDB SDK commands were mocked, so this is not end-to-end or deployed latency and does not complete the phase p95 criterion. Focused replay/benchmark tests (5 files, 17 passed, 1 skipped), targeted ESLint, repository-wide `pnpm typecheck`, and scoped `git diff --check` passed. The DynamoDB Local integration case still must run.
 
 ## P6 — Documents & PDF breadth
 
 **Specification deliverable:** S3 presigned flows, lease/police/condition-report templates, and Arabic rendering validation.
 
-**Status: In progress — lease-related templates and data validated; presigned flows and Arabic validation remain**
+**Status: In progress — document presigned flows and authorization implemented and locally verified; deployed validation remains**
 
 - [x] Add Chromium-backed PDF generation for quittance and lease-related job types, with S3 output.
-- [ ] Implement secure presigned upload/download flows and document API authorization.
+- [ ] Implement secure presigned upload/download flows and document API authorization, including `POST /maintenance/tickets/:id/attachments`.
 - [x] Complete and validate the lease, fiche de police, and état des lieux templates and document data.
-- [ ] Bundle and verify the required fonts if/when Arabic templates are introduced.
-- [ ] Add the Arabic PDF fixture test before shipping any Arabic template.
-- [ ] Meet the phase exit criteria: the Arabic fixture renders and extracted text contains the expected shaped glyphs.
+- [x] Bundle and verify the required fonts for Arabic PDF rendering.
+- [x] Add the Arabic PDF fixture test before shipping any Arabic template.
+- [x] Meet the Arabic rendering criterion: the fixture renders and extracted text contains the expected shaped glyphs.
 
 ### Verification snapshot
+- Added a Chromium-backed Arabic fixture test that renders the base64-embedded Noto Naskh Arabic font to a real PDF and extracts its text with PDF.js. The test verifies the font face loaded and asserts the extracted presentation-form glyph sequence for `السلام عليكم`. Validation passed: `$env:PUPPETEER_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'; pnpm exec vitest run test/unit/pdf-arabic-render.test.ts test/unit/pdf-documents.test.ts` (6 tests), `pnpm typecheck`, targeted ESLint, and `git diff --check`. Windows Chrome was used; execution under Linux CI with bundled Chromium has not been run.
+- Bundled Inter, Noto Sans, and Noto Naskh Arabic variable fonts with their SIL OFL 1.1 notices in the PDF worker artifact. Template CSS embeds each font as a base64 `@font-face`; `pnpm exec vitest run test/unit/pdf-documents.test.ts`, targeted ESLint, `pnpm typecheck`, and `pnpm build:pdf` passed, and the ZIP contains all three fonts and notices. No AWS resources were changed.
 - Added differentiated lease-agreement, fiche de police, and entry/exit état des lieux contexts using account-scoped lease, property, and tenant data. The lease includes dates, rent, charges, deposit, payment terms, and indexation; the police sheet uses available tenant particulars and only the stored ID last-four value; the condition report includes a printable checklist and signature lines.
 - Added local payload/HTML fixtures covering the three lease-related types plus the existing quittance path, including output escaping. Validation passed: `pnpm vitest run test/unit/pdf-documents.test.ts test/unit/document-processors.test.ts` (6 tests), `pnpm typecheck`, targeted ESLint, `pnpm build:pdf`, and `git diff --check`. No AWS services or resources were used.
+- Added owner-authenticated, account-scoped document list/metadata/download-url/presign/upload-confirm/soft-delete routes, DynamoDB metadata persistence and linked-entity ownership checks, and S3 upload verification (account key, exact Content-Type and declared size, 10 MB limit). Download URLs use a 300-second GetObject signature and a sanitized attachment filename. Focused tests (5 files, 29 tests), targeted ESLint, source-only TypeScript typecheck, and `pnpm build:api` passed. The explicitly specified `POST /maintenance/tickets/:id/attachments` route remains missing and is being completed before P6-T1 is marked done. No AWS resources were changed or deployed.
 
 ## P7 — Reports
 
@@ -162,7 +171,7 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 - [x] Add monthly summary and payment/lease register report processing.
 - [x] Add XLSX streaming upload and PDF export paths, report range/row guards, and document/job metadata.
-- [ ] Add representative report fixtures and integration coverage for filters, date ranges, and empty results.
+- [x] Add representative report fixtures and integration coverage for filters, date ranges, and empty results.
 - [ ] Benchmark a 10,000-row export against the deployed worker configuration.
 - [ ] Meet the phase exit criteria: a 10,000-row export completes within 120 seconds.
 
@@ -170,29 +179,55 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 
 **Specification deliverable:** admin routes, impersonation, audit log, rate limits, security headers, and ZAP scan.
 
-**Status: Not started**
+**Status: In progress - P8-T1 complete locally; P8-T2 and the ZAP exit criterion remain.**
 
-- [ ] Implement `/admin/*`, authorization, impersonation, and audit logging.
+- [x] Implement `/admin/*`, authorization, impersonation, and audit logging.
 - [ ] Implement specified rate limits, security headers, and remaining security controls.
+
+P8-T2 progress (2026-10-31): implemented the login per-IP limit (10/minute), the MFA per-user hourly limit (10/hour), atomic DynamoDB fixed-window counters with a test/dev local fallback, required API security headers, CORS preflight max-age, and origin validation for cookie-authenticated refresh requests. This item remains incomplete: the five-attempt MFA challenge state and challenge records remain process-local; `/auth/password/forgot` and its 3/hour per-email limit are absent; API Gateway 50 req/s steady / 100 req/s burst throttling and its API deployment/IAM resources are absent; no ZAP baseline has run.
 - [ ] Run OWASP ZAP baseline against the local/deployed API and address findings.
 - [ ] Meet the phase exit criteria: ZAP baseline has no medium-or-higher findings.
+
+### Verification snapshot
+- P8-T1 local implementation verified: admin/auth/app suite `pnpm exec vitest run test/unit/admin-security.test.ts test/unit/admin-repository.test.ts test/unit/auth-repository.test.ts test/unit/auth-token-keys.test.ts test/unit/app.test.ts` passed (5 files, 45 tests); scoped ESLint, `pnpm run build:api`, and scoped `git diff --check` passed. `pnpm typecheck` is blocked by the unrelated concurrent `test/unit/k6-smoke.test.ts` implicit-`any` error. No AWS action or deployment was performed.
 
 ## P9 — Load & cutover
 
 **Specification deliverable:** k6 smoke, production Terraform, alarms, and runbook.
 
-**Status: Not started**
+**Status: In progress - local-only k6 scenario added; local runtime and production verification remain**
 
-- [ ] Add and run the k6 smoke/load scenario at the target concurrency.
+- [x] Add the loopback-only k6 smoke/load scenario, including the 100-VU profile and local validation tests.
+- [ ] Run the k6 scenario at target concurrency and record measured results.
 - [ ] Provision and verify production Terraform, alarms, and deployment/rollback procedures.
 - [ ] Write and exercise the operational runbook.
 - [ ] Meet the phase exit criteria: p95 is at most 400 ms and p99 is at most 1,000 ms at 100 concurrent users.
 
 ## Current verification snapshot
 
+P8-T2 partial verification (2026-10-31): `pnpm exec vitest run test/unit/app.test.ts --reporter=dot --silent -t "security headers|preflight|cookie-authenticated"` passed (3 tests); `pnpm exec vitest run test/unit/rate-limit.test.ts --reporter=dot --silent` passed (2 tests); targeted ESLint passed. `pnpm typecheck` remains blocked by errors outside this task in `src/modules/auth/repository.ts` (missing `findSessionStateByUser`) and `test/unit/k6-smoke.test.ts` (implicit `any`). No AWS request, apply, or deployment was performed.
+
+P9-T1 verification (2026-10-31): added a loopback-only k6 health scenario with 1-VU smoke and stepped 100-VU load profiles, p95/p99 thresholds, and local instructions. `pnpm exec vitest run test/unit/k6-smoke.test.ts --reporter=dot` passed (1 file, 3 tests), including Node syntax validation and target/profile guard checks. k6 is not installed and Docker is unavailable, so no k6 runtime or live load was executed; no AWS action was performed.
+
 Latest validation (2026-10-27): registered-account payment flow and per-endpoint account-isolation/domain coverage passed `pnpm typecheck`, 30 focused tests, targeted ESLint, and `git diff --check`. These tests did not connect to AWS/DynamoDB. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above. No Git push was performed.
 
+P7-T1 verification (2026-10-31): added representative payment/lease report fixtures and integration coverage that runs the report processor, account-scoped repository queries, streaming XLSX writer, and generated workbook reader. Verified property/lease/status filters, inclusive date bounds, empty workbook output, account isolation, and Query-only (no Scan) access. Corrected the XLSX centimes header spacing defect exposed by formatting assertions. `pnpm exec vitest run test/integration/report-processor.integration.test.ts --reporter=dot` passed (1 file, 3 tests), targeted ESLint passed, and scoped `git diff --check` passed. `pnpm typecheck` is currently blocked by a syntax error in the concurrently changed `src/modules/document/routes.ts` (line 83); no AWS/DynamoDB or S3/SQS services were contacted.
+
 Batch status (2026-10-28): delegated P4-T2, P4-T3, and P6-T2 to the backend implementation agent. P4-T2 and P6-T2 implementation/test evidence is recorded above. The user reports deploying P4-T3 to dev and confirms all verification checks passed on 2026-10-28. P4-T3 is complete based on user-reported external verification; the assistant did not inspect the AWS account.
+
+Batch status (2026-10-31): P4-T1, P6-T3, and P7-T2 were delegated in parallel. P6-T3 is complete and repository-verified: bundled Inter, Noto Sans, and Noto Naskh Arabic variable fonts with SIL OFL 1.1 notices, embedded them as base64 `@font-face` rules, and verified PDF-worker packaging. `pnpm exec vitest run test/unit/pdf-documents.test.ts` (5 tests), targeted ESLint, `pnpm typecheck`, `pnpm build:pdf`, and scoped `git diff --check` passed; the build copied the three font files and notices into the ZIP. No AWS resources were changed.
+
+P4-T1 is blocked: inspection found no API-handler Lambda or EventBridge Scheduler resource in Terraform, no direct signed-invocation/HMAC validation path, and no global bounded all-account overdue processor with the required 5,000-payment cap/truncation log. No code change or test run was made. P7-T2 remains in progress: the added local report-processor benchmark passed for 10,000 XLSX rows in 409 ms on Windows x64/Node v24.13.1 (20 mocked query pages; 462,615 output bytes; DynamoDB/S3/SQS mocked). Focused test, typecheck, targeted ESLint, and diff check passed. This does not verify the deployed worker’s 1024 MB/120 s configuration or real service latency. User approval is required before creating live test jobs/data and export artifacts. No AWS infrastructure mutation or deployment is authorized.
+
+Batch status (2026-10-31, batch 2): delegated P5-T1, P5-T2, and P6-T4 in parallel. P5-T1 covers DynamoDB Streams infrastructure and stream-aggregator connection; P5-T2 covers summary-backed dashboard/report endpoints; P6-T4 is unblocked by completed P6-T2/P6-T3 and covers the Arabic PDF fixture and shaped-glyph assertion. No Terraform apply, AWS mutation, or deployment is authorized.
+
+Batch 2 verification (2026-10-31): P5-T1 and P5-T2 are complete. P5-T1's active-stage stream Lambda, DLQ, scoped IAM, and mapping configuration passed `terraform fmt -check infra/terraform`, `terraform -chdir=infra/terraform validate`, and mocked `terraform -chdir=infra/terraform test` (2 runs). P5-T2's account-scoped dashboard and summary APIs passed `pnpm exec vitest run test/unit/dashboard-repository.test.ts test/unit/dashboard-service.test.ts test/unit/dashboard-routes.test.ts test/unit/app.test.ts --reporter=dot` (4 files, 29 tests), `pnpm typecheck`, targeted ESLint, and `git diff --check`. Neither task was deployed or applied to AWS.
+
+P6-T4 is complete: real Chromium PDF rendering and PDF.js extraction verified the embedded Noto Naskh Arabic font loaded and extracted the expected shaped glyph sequence. `$env:PUPPETEER_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'; pnpm exec vitest run test/unit/pdf-arabic-render.test.ts test/unit/pdf-documents.test.ts` passed (2 files, 6 tests), as did `pnpm typecheck`, targeted ESLint, and `git diff --check`. Linux CI with bundled Chromium remains unverified.
+
+Batch status (2026-10-31, batch 3): delegated P5-T3, P6-T1, and P7-T1 in parallel. P5-T3 follows completed stream and dashboard foundations; P6-T1 covers secure document presign/upload/download APIs; P7-T1 covers representative report fixtures and integration coverage for filters, date ranges, and empty results. No AWS apply, mutation, or deployment is authorized.
+
+Batch status (2026-10-31, batch 4): delegated P8-T1, P8-T2, and P9-T1 in parallel. These are the next ready cards after P5/P6/P7 milestone work and remain repository-local until the security and load-test deliverables are implemented and validated. No AWS apply or deployment is authorized.
 
 P4-T3/P4-T4 dev verification (2026-10-28): user reports the deployment and all requested verification checks passed, including the dev SQS-to-worker-to-document flow and quittance idempotency. P4-T3 and P4-T4 are complete based on user-reported external verification; the assistant did not inspect the AWS account or run a live queue-to-worker test.
 
@@ -200,6 +235,6 @@ P4-T2 verification (2026-10-27): implemented the owner-authenticated quittance r
 
 ## Next recommended work
 
-1. Wire the overdue-payment processor to its scheduled EventBridge invocation (P4-T1).
-2. Bundle and verify required fonts for Arabic PDF rendering (P6-T3).
-3. Benchmark the 10,000-row export against the deployed worker configuration (P7-T2).
+1. Resolve P4-T1 prerequisites: add the API Lambda’s deployment/IAM configuration, a verified signed direct-invocation path, and bounded all-account overdue processing before wiring the EventBridge schedule. No AWS apply/deployment without user approval.
+2. Obtain user approval to run a controlled deployed-worker 10,000-row report benchmark for P7-T2; local baseline passed but does not satisfy deployed acceptance.
+3. After the active batch, begin an independent ready card such as P8-T1, P8-T2, or P9-T1–T3.

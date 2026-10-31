@@ -1,0 +1,103 @@
+[
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "PAYMENT#payment-jan-first",
+    "accountId": "account-a",
+    "entityType": "Payment",
+    "periodStart": "2026-01-01",
+    "dueDate": "2026-01-05",
+    "leaseId": "lease-alpha",
+    "propertyId": "property-a",
+    "status": "paid",
+    "amountDue": 125000,
+    "amountPaid": 125000
+  },
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "PAYMENT#payment-jan-last",
+    "accountId": "account-a",
+    "entityType": "Payment",
+    "periodStart": "2026-01-31",
+    "dueDate": "2026-01-31",
+    "leaseId": "lease-beta",
+    "propertyId": "property-a",
+    "status": "due",
+    "amountDue": 130000,
+    "amountPaid": 0
+  },
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "PAYMENT#payment-feb",
+    "accountId": "account-a",
+    "entityType": "Payment",
+    "periodStart": "2026-02-01",
+    "dueDate": "2026-02-05",
+    "leaseId": "lease-beta",
+    "propertyId": "property-b",
+    "status": "paid",
+    "amountDue": 135000,
+    "amountPaid": 135000
+  },
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "PAYMENT#payment-dec",
+    "accountId": "account-a",
+    "entityType": "Payment",
+    "periodStart": "2025-12-31",
+    "dueDate": "2026-01-01",
+    "leaseId": "lease-alpha",
+    "propertyId": "property-a",
+    "status": "paid",
+    "amountDue": 120000,
+    "amountPaid": 120000
+  },
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "LEASE#lease-alpha",
+    "accountId": "account-a",
+    "entityType": "Lease",
+    "startDate": "2025-09-01",
+    "endDate": "2026-08-31",
+    "leaseId": "lease-alpha",
+    "propertyId": "property-a",
+    "status": "active",
+    "rentAmount": 125000
+  },
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "LEASE#lease-beta",
+    "accountId": "account-a",
+    "entityType": "Lease",
+    "startDate": "2026-01-31",
+    "endDate": "2026-12-31",
+    "leaseId": "lease-beta",
+    "propertyId": "property-a",
+    "status": "active",
+    "rentAmount": 130000
+  },
+  {
+    "PK": "ACCOUNT#account-a",
+    "SK": "LEASE#lease-gamma",
+    "accountId": "account-a",
+    "entityType": "Lease",
+    "startDate": "2026-02-01",
+    "endDate": "2027-01-31",
+    "leaseId": "lease-gamma",
+    "propertyId": "property-b",
+    "status": "pending",
+    "rentAmount": 135000
+  },
+  {
+    "PK": "ACCOUNT#account-b",
+    "SK": "PAYMENT#other-account-payment",
+    "accountId": "account-b",
+    "entityType": "Payment",
+    "periodStart": "2026-01-15",
+    "dueDate": "2026-01-15",
+    "leaseId": "other-account-lease",
+    "propertyId": "other-account-property",
+    "status": "paid",
+    "amountDue": 990000,
+    "amountPaid": 990000
+  }
+]

@@ -1,6 +1,6 @@
 import { ZipArchive } from 'archiver';
 import { build } from 'esbuild';
-import { createWriteStream, cpSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { copyFileSync, createWriteStream, cpSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { finished } from 'node:stream/promises';
@@ -126,6 +126,34 @@ const buildArtifact = async (artifactName: ArtifactName): Promise<void> => {
     const packageDirectory = path.join(outputDirectory, 'node_modules', packageName);
 
     copyRuntimePackage(packageName, root, packageDirectory, new Set());
+  }
+
+  if (artifactName === 'pdf-worker') {
+    const sourceFontsDirectory = path.join(root, 'assets', 'fonts');
+    const packagedFontsDirectory = path.join(outputDirectory, 'assets', 'fonts');
+    const requiredFontFiles = [
+      'Inter-Variable.ttf',
+      'NotoNaskhArabic-Variable.ttf',
+      'NotoSans-Variable.ttf',
+      'OFL-Inter.txt',
+      'OFL-NotoNaskhArabic.txt',
+      'OFL-NotoSans.txt',
+    ];
+
+    mkdirSync(packagedFontsDirectory, { recursive: true });
+
+    for (const file of requiredFontFiles) {
+      const sourcePath = path.join(sourceFontsDirectory, file);
+      const packagedPath = path.join(packagedFontsDirectory, file);
+
+      copyFileSync(sourcePath, packagedPath);
+      const source = readFileSync(sourcePath);
+      const packaged = readFileSync(packagedPath);
+
+      if (!source.equals(packaged)) {
+        throw new Error(`PDF font asset "${file}" was not packaged byte-for-byte.`);
+      }
+    }
   }
 
   const archive = new ZipArchive({ zlib: { level: 9 } });

@@ -2,6 +2,7 @@ import type { AttributeValue, DynamoDBRecord, DynamoDBStreamEvent } from 'aws-la
 import {
   GetCommand,
   TransactWriteCommand,
+  type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 
@@ -144,8 +145,9 @@ const isDuplicateEvent = async (
   accountId: string,
   eventId: string,
   tableName: string,
+  client: DynamoDBDocumentClient = getDynamoDocumentClient(),
 ): Promise<boolean> => {
-  const result = await getDynamoDocumentClient().send(
+  const result = await client.send(
     new GetCommand({
       TableName: tableName,
       Key: { PK: pk.account(accountId), SK: sk.processed(eventId) },
@@ -162,6 +164,7 @@ export const applySummaryDeltas = async (
   eventId: string,
   deltasByMonth: Map<string, SummaryDelta>,
   tableName: string,
+  client: DynamoDBDocumentClient = getDynamoDocumentClient(),
 ): Promise<void> => {
   const now = new Date().toISOString();
   const transactItems = [
@@ -218,7 +221,7 @@ export const applySummaryDeltas = async (
     })),
   ];
 
-  await getDynamoDocumentClient().send(
+  await client.send(
     new TransactWriteCommand({
       TransactItems: transactItems,
     }),
@@ -228,6 +231,7 @@ export const applySummaryDeltas = async (
 export const createStreamRecordProcessor = (
   tableName: string,
   apply = applySummaryDeltas,
+  client?: DynamoDBDocumentClient,
 ) => {
   return async (record: DynamoDBRecord): Promise<void> => {
     const eventId = record.eventID;
@@ -277,12 +281,12 @@ export const createStreamRecordProcessor = (
     }
 
     try {
-      await apply(accountId, eventId, deltasByMonth, tableName);
+      await apply(accountId, eventId, deltasByMonth, tableName, client);
     } catch (error) {
       if (
         error instanceof Error &&
         error.name === 'TransactionCanceledException' &&
-        (await isDuplicateEvent(accountId, eventId, tableName))
+        (await isDuplicateEvent(accountId, eventId, tableName, client))
       ) {
         baseLogger.info({ eventId, accountId }, 'Duplicate stream event already aggregated');
 

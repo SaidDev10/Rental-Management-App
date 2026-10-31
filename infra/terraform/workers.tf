@@ -302,11 +302,133 @@ resource "aws_lambda_event_source_mapping" "worker" {
   depends_on = [aws_iam_role_policy.worker_common, aws_iam_role_policy.worker_document_access, aws_iam_role_policy.worker_notification_publish, aws_iam_role_policy.notification_worker, aws_cloudwatch_log_group.worker]
 }
 
+resource "aws_sqs_queue" "stream_dlq" {
+  name                      = "${local.worker_prefix}-stream-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
 
+  tags = {
+    Stage     = var.stage
+    ManagedBy = "Terraform"
+  }
+}
 
+resource "aws_iam_role" "stream_aggregator" {
+  name = "${local.worker_prefix}-stream-aggregator-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 
+  tags = {
+    Stage     = var.stage
+    ManagedBy = "Terraform"
+  }
+}
 
+resource "aws_cloudwatch_log_group" "stream_aggregator" {
+  name              = "/aws/lambda/${local.worker_prefix}-stream-aggregator"
+  retention_in_days = 30
 
+  tags = {
+    Stage     = var.stage
+    ManagedBy = "Terraform"
+  }
+}
 
+resource "aws_iam_role_policy" "stream_aggregator" {
+  name = "stream-aggregator-runtime"
+  role = aws_iam_role.stream_aggregator.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "WriteLambdaLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.stream_aggregator.arn}:*"
+      },
+      {
+        Sid      = "ReadTableStream"
+        Effect   = "Allow"
+        Action   = ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator", "dynamodb:ListStreams"]
+        Resource = aws_dynamodb_table.main.stream_arn
+      },
+      {
+        Sid      = "ReadAndUpdateAggregationItems"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:TransactWriteItems"]
+        Resource = aws_dynamodb_table.main.arn
+      },
+      {
+        Sid      = "SendFailedStreamBatches"
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.stream_dlq.arn
+      }
+    ]
+  })
+}
+
+resource "aws_s3_object" "stream_aggregator_artifact" {
+  bucket                 = var.lambda_artifacts_bucket_name
+  key                    = "${var.stage}/workers/stream-aggregator.zip"
+  source                 = var.stream_aggregator_zip_path
+  source_hash            = filebase64sha256(var.stream_aggregator_zip_path)
+  content_type           = "application/zip"
+  server_side_encryption = "AES256"
+}
+
+resource "aws_lambda_function" "stream_aggregator" {
+  function_name                  = "${local.worker_prefix}-stream-aggregator"
+  role                           = aws_iam_role.stream_aggregator.arn
+  s3_bucket                      = var.lambda_artifacts_bucket_name
+  s3_key                         = aws_s3_object.stream_aggregator_artifact.key
+  source_code_hash               = filebase64sha256(var.stream_aggregator_zip_path)
+  runtime                        = "nodejs22.x"
+  handler                        = "stream-aggregator.handler"
+  timeout                        = 30
+  memory_size                    = 512
+  reserved_concurrent_executions = -1
+
+  environment {
+    variables = {
+      STAGE      = var.stage
+      TABLE_NAME = aws_dynamodb_table.main.name
+      LOG_LEVEL  = var.log_level
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.stream_aggregator, aws_cloudwatch_log_group.stream_aggregator]
+
+  tags = {
+    Stage     = var.stage
+    ManagedBy = "Terraform"
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "stream_aggregator" {
+  event_source_arn               = aws_dynamodb_table.main.stream_arn
+  function_name                  = aws_lambda_function.stream_aggregator.arn
+  starting_position              = "LATEST"
+  batch_size                     = 100
+  bisect_batch_on_function_error = true
+  maximum_retry_attempts         = 3
+  parallelization_factor         = 1
+  function_response_types        = ["ReportBatchItemFailures"]
+  enabled                        = true
+
+  destination_config {
+    on_failure {
+      destination_arn = aws_sqs_queue.stream_dlq.arn
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.stream_aggregator, aws_cloudwatch_log_group.stream_aggregator]
+}
 
 

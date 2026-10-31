@@ -58,6 +58,16 @@ output "notification_dlq_url" {
   value       = aws_sqs_queue.worker_dlq["notification"].id
 }
 
+output "stream_dlq_url" {
+  description = "DynamoDB stream aggregator failure destination queue URL."
+  value       = aws_sqs_queue.stream_dlq.id
+}
+
+output "stream_dlq_arn" {
+  description = "DynamoDB stream aggregator failure destination queue ARN."
+  value       = aws_sqs_queue.stream_dlq.arn
+}
+
 output "documents_bucket_name" {
   description = "Documents S3 bucket name consumed by workers."
   value       = var.documents_bucket_name

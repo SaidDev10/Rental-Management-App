@@ -4,6 +4,12 @@ mock_provider "aws" {
       arn = "arn:aws:iam::123456789012:role/mock-worker"
     }
   }
+
+  mock_resource "aws_sqs_queue" {
+    defaults = {
+      arn = "arn:aws:sqs:eu-north-1:123456789012:mock-queue"
+    }
+  }
 }
 
 run "worker_queue_and_mapping_configuration" {
@@ -52,5 +58,54 @@ run "worker_queue_and_mapping_configuration" {
       contains(jsondecode(aws_iam_role_policy.worker_common[key].policy).Statement[2].Action, "sqs:DeleteMessage")
     ])
     error_message = "Each worker role must receive/delete messages only from its assigned queue."
+  }
+}
+
+run "stream_aggregator_configuration" {
+  command = apply
+
+  variables {
+    stage = "dev"
+  }
+
+  assert {
+    condition = (
+      aws_dynamodb_table.main.stream_enabled &&
+      aws_dynamodb_table.main.stream_view_type == "NEW_AND_OLD_IMAGES" &&
+      aws_lambda_event_source_mapping.stream_aggregator.event_source_arn == aws_dynamodb_table.main.stream_arn &&
+      aws_lambda_event_source_mapping.stream_aggregator.function_name == aws_lambda_function.stream_aggregator.arn
+    )
+    error_message = "The active-stage table must expose NEW_AND_OLD_IMAGES and feed the stream aggregator."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.stream_aggregator.batch_size == 100 &&
+      aws_lambda_event_source_mapping.stream_aggregator.bisect_batch_on_function_error &&
+      aws_lambda_event_source_mapping.stream_aggregator.maximum_retry_attempts == 3 &&
+      aws_lambda_event_source_mapping.stream_aggregator.parallelization_factor == 1
+    )
+    error_message = "The stream mapping must use the specified batch, retry, bisection, and parallelization settings."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.stream_aggregator.destination_config[0].on_failure[0].destination_arn == aws_sqs_queue.stream_dlq.arn &&
+      contains(aws_lambda_event_source_mapping.stream_aggregator.function_response_types, "ReportBatchItemFailures")
+    )
+    error_message = "Failed stream batches must go to the stream DLQ and the mapping must enable partial batch failures."
+  }
+
+  assert {
+    condition = (
+      contains(
+        jsondecode(aws_iam_role_policy.stream_aggregator.policy).Statement[1].Action,
+        "dynamodb:GetRecords"
+      ) &&
+      jsondecode(aws_iam_role_policy.stream_aggregator.policy).Statement[1].Resource == aws_dynamodb_table.main.stream_arn &&
+      jsondecode(aws_iam_role_policy.stream_aggregator.policy).Statement[2].Resource == aws_dynamodb_table.main.arn &&
+      jsondecode(aws_iam_role_policy.stream_aggregator.policy).Statement[3].Resource == aws_sqs_queue.stream_dlq.arn
+    )
+    error_message = "The aggregator role must be scoped to its table stream, aggregation table, and stream DLQ."
   }
 }

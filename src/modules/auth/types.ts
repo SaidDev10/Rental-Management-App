@@ -5,6 +5,7 @@ export type AuthEnv = {
     role: 'owner' | 'super_admin';
     email: string;
     sessionId: string;
+    impersonating?: boolean;
   };
 };
 

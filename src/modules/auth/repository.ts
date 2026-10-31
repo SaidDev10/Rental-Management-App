@@ -51,6 +51,7 @@ export type AuthRepository = {
   }) => Promise<SessionRecord>;
   findSessionByRefreshTokenHash: (refreshTokenHash: string) => Promise<SessionRecord | undefined>;
   findSessionByUser: (userId: string, sessionId?: string) => Promise<SessionRecord | undefined>;
+  findSessionStateByUser: (userId: string, sessionId?: string) => Promise<SessionRecord | undefined>;
   rotateSession: (input: {
     userId: string;
     sessionId: string;
@@ -291,6 +292,13 @@ const getLocalAuthRepository = (): AuthRepository => ({
     }
 
     return session.active ? session : undefined;
+  },
+
+  async findSessionStateByUser(userId: string, sessionId?: string): Promise<SessionRecord | undefined> {
+    const session = sessionsByUserId.get(userId);
+    if (!session || (sessionId && session.sessionId !== sessionId)) return undefined;
+
+    return session;
   },
 
   async rotateSession({ userId, sessionId, nextRefreshTokenHash, updatedAt }) {
@@ -645,6 +653,22 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
     const session = toSessionRecord(item);
 
     return session.active ? session : undefined;
+  },
+
+  async findSessionStateByUser(userId: string, sessionId?: string) {
+    const shouldUseDynamoAuth = usesDynamoAuth();
+    if (!shouldUseDynamoAuth) return getLocalAuthRepository().findSessionStateByUser(userId, sessionId);
+
+    const tableName = getAuthTableName();
+    const result = await client.send(new GetCommand({
+      TableName: tableName,
+      Key: { PK: pk.session(userId), SK: sk.active() },
+      ConsistentRead: true,
+    }));
+    const item = result.Item as Record<string, unknown> | undefined;
+    if (!item || (sessionId && String(item.sessionId ?? '') !== sessionId)) return undefined;
+
+    return toSessionRecord(item);
   },
 
   async rotateSession(input) {

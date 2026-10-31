@@ -155,7 +155,7 @@ const loadRows = async (payload: ReportJobPayload): Promise<ReportRow[]> => {
 const formatHeader = (value: string): string => {
   return value
     .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/Centimes$/, ' (centimes)')
+    .replace(/\s*Centimes$/, ' (centimes)')
     .replace(/^./, (first) => first.toUpperCase());
 };
 
@@ -191,7 +191,9 @@ const uploadXlsx = async (
     useStyles: true,
     useSharedStrings: true,
   });
-  const worksheet = workbook.addWorksheet('Report');
+  const worksheet = workbook.addWorksheet('Report', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
   const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
 
   worksheet.columns = columns.map((keyName) => ({
@@ -199,8 +201,6 @@ const uploadXlsx = async (
     key: keyName,
     width: Math.min(36, Math.max(14, formatHeader(keyName).length + 2)),
   }));
-  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
-
   for (const row of rows) {
     worksheet.addRow(row).commit();
   }

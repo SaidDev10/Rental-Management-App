@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { AppError, UnauthenticatedError } from '../../shared/errors';
 import { createAuthRepository, type AuthRepository } from './repository';
 import { hashPassword, verifyPassword } from './passwords';
+import { enforceRateLimit } from '../../shared/security/rate-limit';
 import { generateRefreshToken, hashRefreshToken, signAccessToken } from './tokens';
 import type {
   LoginInput,
@@ -201,6 +202,7 @@ export const authService = {
       throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
     }
 
+    await enforceRateLimit('auth-mfa-user', challenge.userId, 10, 60 * 60);
     challenge.attempts += 1;
 
     if (challenge.attempts > 5) {
