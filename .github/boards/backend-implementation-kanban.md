@@ -16,9 +16,9 @@ Latest repository validation (2026-10-31) passed for Terraform stream configurat
 |  | **P6-T1 · P6** Implement secure presigned upload/download flows and document API authorization, including the maintenance-ticket attachment route. | **P8-T3 · P8** Run the OWASP ZAP baseline and address findings until there are no medium-or-higher findings. **Blocked by:** P8-T1, P8-T2. |  |
 |  |  | **P9-T4 · P9** Run the k6 scenario and verify p95 ≤ 400 ms and p99 ≤ 1,000 ms at 100 concurrent users. **Blocked by:** P9-T1, P9-T2. |  |
 |  |  | **P9-T5 · P9** Exercise the operational runbook. **Blocked by:** P9-T2, P9-T3. |  |
-|  | **P8-T1 · P8** Implement `/admin/*`, authorization, impersonation, and audit logging. |  |  |
-|  | **P8-T2 · P8** Implement specified rate limits, security headers, and remaining security controls. |  |  |
-|  | **P9-T1 · P9** Create the k6 smoke/load scenario. |  |  |
+|  | **P8-T1 · P8** Implement `/admin/*`, authorization, impersonation, and audit logging. **Selected in batch 6.** |  |  |
+|  | **P8-T2 · P8** Implement specified rate limits, security headers, and remaining security controls. **Selected in batch 6.** |  |  |
+|  | **P9-T1 · P9** Create the k6 smoke/load scenario. **Selected in batch 6.** |  |  |
 |  | **P9-T2 · P9** Provision and verify production Terraform, alarms, and deployment/rollback procedures. **Local Terraform validation passed; AWS production verification remains blocked pending approval.** |  |  |
 |  | **P9-T3 · P9** Write and reconcile the operational runbook. **Runbook written and validated locally; production exercise remains blocked pending approval and the missing API/alarm path.** |  |  |
 

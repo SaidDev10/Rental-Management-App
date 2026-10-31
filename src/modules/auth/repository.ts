@@ -60,6 +60,7 @@ export type AuthRepository = {
     updatedAt?: string;
   }) => Promise<SessionRecord>;
   revokeSession: (userId: string, sessionId: string) => Promise<void>;
+  updatePassword: (input: { userId: string; accountId: string; passwordHash: string }) => Promise<void>;
   revokeSessionAfterRefreshTokenReuse: (input: {
     userId: string;
     sessionId: string;
@@ -361,6 +362,22 @@ const getLocalAuthRepository = (): AuthRepository => ({
 
     sessionsByUserId.set(userId, revokedSession);
     sessionsByRefreshHash.set(session.refreshTokenHash, revokedSession);
+  },
+
+  async updatePassword({ userId, accountId, passwordHash }): Promise<void> {
+    const user = usersById.get(userId);
+
+    if (!user || user.accountId !== accountId) {
+      return;
+    }
+
+    const nextUser: AuthUserRecord = {
+      ...user,
+      passwordHash,
+    };
+
+    usersById.set(userId, nextUser);
+    usersByEmail.set(normalizeEmail(user.email), nextUser);
   },
 
   async revokeSessionAfterRefreshTokenReuse({ userId, sessionId, familyId, refreshTokenHash }) {
@@ -815,6 +832,29 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
           ':revokedAt': now,
           ':updatedAt': now,
           ':sessionId': sessionId,
+        },
+      }),
+    );
+  },
+
+  async updatePassword({ userId, accountId, passwordHash }) {
+    const shouldUseDynamoAuth = usesDynamoAuth();
+
+    if (!shouldUseDynamoAuth) {
+      return getLocalAuthRepository().updatePassword({ userId, accountId, passwordHash });
+    }
+
+    const tableName = getAuthTableName();
+    const now = new Date().toISOString();
+
+    await client.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { PK: pk.account(accountId), SK: sk.user(userId) },
+        UpdateExpression: 'SET passwordHash = :passwordHash, passwordUpdatedAt = :now, updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':passwordHash': passwordHash,
+          ':now': now,
         },
       }),
     );

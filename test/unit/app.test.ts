@@ -22,6 +22,7 @@ describe('backend skeleton', () => {
     expect(response.headers.get('X-Frame-Options')).toBe('DENY');
     expect(response.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
     expect(response.headers.get('Permissions-Policy')).toBe('geolocation=(), microphone=(), camera=()');
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
 
   it('applies security headers and the configured max age to CORS preflight responses', async () => {
@@ -37,6 +38,22 @@ describe('backend skeleton', () => {
     expect(response.headers.get('X-Frame-Options')).toBe('DENY');
   });
 
+  it('limits registration requests by trusted source IP', async () => {
+    const sourceIp = `198.51.100.${randomUUID()}`;
+    const request = () => app.fetch(
+      new Request('http://localhost/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      { requestContext: { http: { sourceIp } } },
+    );
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await request()).status).toBe(400);
+    }
+    expect((await request()).status).toBe(429);
+  });
   it('rejects cookie-authenticated refresh requests from untrusted or missing origins', async () => {
     const response = await app.request('http://localhost/auth/refresh', {
       method: 'POST',

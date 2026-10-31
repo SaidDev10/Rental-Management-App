@@ -27,9 +27,10 @@ const actorFrom = (c: Context<AuthEnv>): AdminActor => {
   if (!userId || !role || !email || !sessionId || !accountId) {
     throw new UnauthenticatedError('Missing admin session context');
   }
-  const event = c.env as unknown as { requestContext?: { http?: { sourceIp?: string }; requestId?: string } } | undefined;
-  const ip = event?.requestContext?.http?.sourceIp;
-  const requestId = event?.requestContext?.requestId ?? c.req.header('x-request-id');
+  // @hono/aws-lambda provides requestContext directly in Hono's bindings.
+  const lambdaContext = c.env as unknown as { requestContext?: { http?: { sourceIp?: string }; identity?: { sourceIp?: string }; requestId?: string } } | undefined;
+  const ip = lambdaContext?.requestContext?.http?.sourceIp ?? lambdaContext?.requestContext?.identity?.sourceIp;
+  const requestId = lambdaContext?.requestContext?.requestId ?? c.req.header('x-request-id');
   const userAgent = c.req.header('user-agent');
 
   return {

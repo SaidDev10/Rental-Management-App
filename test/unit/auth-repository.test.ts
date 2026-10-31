@@ -14,6 +14,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.TABLE_NAME;
   delete process.env.USE_DYNAMO_AUTH;
+  delete process.env.STAGE;
 });
 
 describe('auth service repository flow', () => {
@@ -79,6 +80,85 @@ describe('auth service repository flow', () => {
       ),
     ).rejects.toMatchObject({ status: 403, code: 'ACCOUNT_DISABLED' });
     expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('issues a password reset challenge for a valid email and validates the reset code', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const user = {
+      id: 'user_reset',
+      accountId: 'account_reset',
+      email: 'owner@example.com',
+      name: 'Reset Owner',
+      role: 'owner' as const,
+      locale: 'fr' as const,
+      accountStatus: 'active',
+      passwordHash: await hashPassword('supersecret123'),
+    };
+    const updatePassword = vi.fn();
+    const repository = {
+      findUserByEmail: vi.fn().mockResolvedValue(user),
+      updatePassword,
+    };
+
+    const challenge = await authService.requestPasswordReset({ email: 'owner@example.com' }, repository as never);
+    expect(challenge.sent).toBe(true);
+    expect(challenge.challengeToken).toBeTruthy();
+
+    const resetResult = await authService.resetPassword(
+      { challengeToken: challenge.challengeToken!, code: '100000', password: 'newsupersecret123' },
+      repository as never,
+    );
+
+    expect(resetResult).toMatchObject({ passwordReset: true });
+    expect(updatePassword).toHaveBeenCalledWith({
+      userId: 'user_reset',
+      accountId: 'account_reset',
+      passwordHash: expect.any(String),
+    });
+  });
+
+  it('limits MFA challenge resends per user across replacement challenge tokens', async () => {
+    process.env.STAGE = 'test';
+    process.env.USE_DYNAMO_AUTH = 'false';
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const repository = {
+      findUserByEmail: async () => ({
+        id: 'user_mfa_resend_limited',
+        accountId: 'mfa-resend-account',
+        email: 'mfa-resend@example.com',
+        name: 'MFA Owner',
+        role: 'owner' as const,
+        locale: 'fr' as const,
+        accountStatus: 'active',
+        mfaEnabled: true,
+        passwordHash: await hashPassword('supersecret123'),
+      }),
+    };
+    const login = await authService.login(
+      { email: 'mfa-resend@example.com', password: 'supersecret123' },
+      repository as never,
+    );
+    if (!('mfaRequired' in login)) throw new Error('Expected an MFA challenge');
+
+    let challengeToken = login.challengeToken;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const resent = await authService.resendMfaChallenge(challengeToken);
+      expect(resent.sent).toBe(true);
+      // Issue another challenge for the same user to verify the shared account-level limit.
+      const next = await authService.login(
+        { email: 'mfa-resend@example.com', password: 'supersecret123' },
+        repository as never,
+      );
+      if (!('mfaRequired' in next)) throw new Error('Expected an MFA challenge');
+      challengeToken = next.challengeToken;
+    }
+
+    await expect(authService.resendMfaChallenge(challengeToken)).rejects.toMatchObject({
+      status: 429,
+      code: 'RATE_LIMITED',
+    });
   });
 
   it('rejects MFA completion if the account was disabled after the challenge was issued', async () => {

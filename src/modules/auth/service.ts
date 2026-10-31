@@ -32,7 +32,17 @@ type MfaChallenge = {
   attempts: number;
 };
 
+type PasswordResetChallenge = {
+  userId: string;
+  accountId: string;
+  email: string;
+  code: string;
+  expiresAt: number;
+  attempts: number;
+};
+
 const mfaChallenges = new Map<string, MfaChallenge>();
+const passwordResetChallenges = new Map<string, PasswordResetChallenge>();
 
 const isLockedOut = (userRecord: { failedLoginAttempts?: number; lockedUntil?: string | null }): boolean => {
   const attempts = userRecord.failedLoginAttempts ?? 0;
@@ -58,6 +68,23 @@ const createMfaChallenge = (userRecord: { id: string; accountId: string; email: 
   };
 
   mfaChallenges.set(challengeToken, challenge);
+
+  return { challengeToken, challenge };
+};
+
+const createPasswordResetChallenge = (userRecord: { id: string; accountId: string; email: string }): { challengeToken: string; challenge: PasswordResetChallenge } => {
+  const challengeToken = randomUUID();
+  const code = `${Math.floor(100000 + Math.random() * 900000)}`;
+  const challenge: PasswordResetChallenge = {
+    userId: userRecord.id,
+    accountId: userRecord.accountId,
+    email: userRecord.email,
+    code,
+    expiresAt: Date.now() + 15 * 60 * 1000,
+    attempts: 0,
+  };
+
+  passwordResetChallenges.set(challengeToken, challenge);
 
   return { challengeToken, challenge };
 };
@@ -286,6 +313,7 @@ export const authService = {
       mfaChallenges.delete(challengeToken);
       throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
     }
+    await enforceRateLimit('auth-mfa-resend-user', challenge.userId, 3, 60 * 60);
 
     const nextChallenge = createMfaChallenge({
       id: challenge.userId,
@@ -297,6 +325,74 @@ export const authService = {
     mfaChallenges.set(nextChallenge.challengeToken, nextChallenge.challenge);
 
     return { sent: true };
+  },
+
+  async requestPasswordReset({ email }: { email: string }, repository = getDefaultAuthRepository()): Promise<{ sent: true; challengeToken?: string; expiresIn?: number }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new AppError('Validation error', 400, 'VALIDATION_ERROR');
+    }
+
+    await enforceRateLimit('auth-password-reset-email', normalizedEmail, 3, 60 * 60);
+
+    const userRecord = await repository.findUserByEmail(normalizedEmail);
+    if (!userRecord) {
+      return { sent: true };
+    }
+
+    const { challengeToken } = createPasswordResetChallenge(userRecord);
+
+    return { sent: true, challengeToken, expiresIn: 900 };
+  },
+
+  async resetPassword(
+    { challengeToken, code, password }: { challengeToken: string; code: string; password: string },
+    repository = getDefaultAuthRepository(),
+  ): Promise<{ passwordReset: true }> {
+    const challenge = passwordResetChallenges.get(challengeToken);
+    if (!challenge) {
+      throw new AppError('Invalid password reset code', 401, 'INVALID_OTP');
+    }
+
+    if (Date.now() > challenge.expiresAt) {
+      passwordResetChallenges.delete(challengeToken);
+      throw new AppError('OTP expired', 410, 'OTP_EXPIRED');
+    }
+
+    await enforceRateLimit('auth-password-reset-user', challenge.userId, 10, 60 * 60);
+    challenge.attempts += 1;
+
+    if (challenge.attempts > 5) {
+      passwordResetChallenges.delete(challengeToken);
+      throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
+    }
+
+    if (challenge.code !== code) {
+      if (challenge.attempts >= 5) {
+        passwordResetChallenges.delete(challengeToken);
+        throw new AppError('OTP attempts exceeded', 429, 'OTP_ATTEMPTS_EXCEEDED');
+      }
+
+      throw new AppError('Invalid password reset code', 401, 'INVALID_OTP');
+    }
+
+    if (password.length < 8) {
+      throw new AppError('Validation error', 400, 'VALIDATION_ERROR');
+    }
+
+    const userRecord = await repository.findUserByEmail(challenge.email);
+    if (!userRecord) {
+      throw new UnauthenticatedError('Invalid credentials');
+    }
+
+    passwordResetChallenges.delete(challengeToken);
+    await repository.updatePassword({
+      userId: userRecord.id,
+      accountId: userRecord.accountId,
+      passwordHash: await hashPassword(password),
+    });
+
+    return { passwordReset: true };
   },
 
   async logout(userId: string, sessionId: string, repository = getDefaultAuthRepository()): Promise<void> {

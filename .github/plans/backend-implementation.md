@@ -184,7 +184,7 @@ Progress: Terraform configuration uses the stage-specific naming contract in §7
 - [x] Implement `/admin/*`, authorization, impersonation, and audit logging.
 - [ ] Implement specified rate limits, security headers, and remaining security controls.
 
-P8-T2 progress (2026-10-31): implemented the login per-IP limit (10/minute), the MFA per-user hourly limit (10/hour), atomic DynamoDB fixed-window counters with a test/dev local fallback, required API security headers, CORS preflight max-age, and origin validation for cookie-authenticated refresh requests. This item remains incomplete: the five-attempt MFA challenge state and challenge records remain process-local; `/auth/password/forgot` and its 3/hour per-email limit are absent; API Gateway 50 req/s steady / 100 req/s burst throttling and its API deployment/IAM resources are absent; no ZAP baseline has run.
+P8-T2 progress (2026-10-31): implemented the login per-IP limit (10/minute), the MFA per-user hourly limit (10/hour), atomic DynamoDB fixed-window counters with a test/dev local fallback, required API security headers, CORS preflight max-age, and origin validation for cookie-authenticated refresh requests. This item remains incomplete: the five-attempt MFA challenge state and challenge records remain process-local; password-forgot and its 3/hour per-email limit are implemented, with per-IP throttling now added; API Gateway 50 req/s steady / 100 req/s burst throttling and its API deployment/IAM resources are absent; no ZAP baseline has run.
 - [ ] Run OWASP ZAP baseline against the local/deployed API and address findings.
 - [ ] Meet the phase exit criteria: ZAP baseline has no medium-or-higher findings.
 
@@ -212,9 +212,9 @@ P9-T3 verification (2026-10-31): `pnpm exec vitest run test/unit/k6-smoke.test.t
 
 ## Current verification snapshot
 
-P8-T2 partial verification (2026-10-31): `pnpm exec vitest run test/unit/app.test.ts --reporter=dot --silent -t "security headers|preflight|cookie-authenticated"` passed (3 tests); `pnpm exec vitest run test/unit/rate-limit.test.ts --reporter=dot --silent` passed (2 tests); targeted ESLint passed. `pnpm typecheck` remains blocked by errors outside this task in `src/modules/auth/repository.ts` (missing `findSessionStateByUser`) and `test/unit/k6-smoke.test.ts` (implicit `any`). No AWS request, apply, or deployment was performed.
+P8-T2 local progress (2026-10-31): added per-IP fixed-window limits for registration (5/hour), refresh (60/minute), MFA verify (20/hour), MFA resend (10/hour), password-forgot (10/hour), and password-reset (20/hour); MFA resend also has a 3/hour per-user counter. API responses now include `Cache-Control: no-store`. Focused app tests (4), rate-limit tests (2), and auth repository tests (15) passed; scoped ESLint, `pnpm typecheck`, and `pnpm run build:api` passed. The wider combined suite still has a local-auth account-lockout assertion failure (expected 423, received 401); durable failed-login state is a separate follow-up. The card remains incomplete: MFA/password-reset challenge state is process-local, API Gateway steady/burst throttles and API deployment/IAM are absent, and no ZAP baseline has run. No AWS action or deployment was performed.
 
-P9-T1 verification (2026-10-31): added a loopback-only k6 health scenario with 1-VU smoke and stepped 100-VU load profiles, p95/p99 thresholds, and local instructions. `pnpm exec vitest run test/unit/k6-smoke.test.ts --reporter=dot` passed (1 file, 3 tests), including Node syntax validation and target/profile guard checks. k6 is not installed and Docker is unavailable, so no k6 runtime or live load was executed; no AWS action was performed.
+P9-T1 verification (2026-10-31): strengthened profile tests to assert exact smoke/load stages and all shared thresholds. `pnpm exec vitest run test/unit/k6-smoke.test.ts --reporter=dot` passed (1 file, 3 tests); targeted ESLint passed; `k6 inspect load/k6-smoke.js` and `k6 inspect --env PROFILE=load load/k6-smoke.js` both passed and confirmed the expected profiles/thresholds. k6 is installed, but the local API was unavailable at `127.0.0.1:3000`, so no scenario run or measured load result was recorded. No AWS action was performed.
 
 Latest validation (2026-10-27): registered-account payment flow and per-endpoint account-isolation/domain coverage passed `pnpm typecheck`, 30 focused tests, targeted ESLint, and `git diff --check`. These tests did not connect to AWS/DynamoDB. Earlier tenant/property validations, user-reported dev auth verification, Terraform validation, and the 17-pattern local DynamoDB run are recorded above. No Git push was performed.
 
@@ -237,6 +237,8 @@ Batch status (2026-10-31, batch 3): delegated P5-T3, P6-T1, and P7-T1 in paralle
 Batch status (2026-10-31, batch 4): delegated P8-T1, P8-T2, and P9-T1 in parallel. These are the next ready cards after P5/P6/P7 milestone work and remain repository-local until the security and load-test deliverables are implemented and validated. No AWS apply or deployment is authorized.
 
 Batch status (2026-10-31, batch 5): delegated P9-T2 and P9-T3 in parallel. The tasks are in progress and remain repository-local until the production Terraform verification and operational runbook are fully validated; no AWS apply or deployment is authorized.
+
+Batch status (2026-10-31, batch 6): delegated P8-T1, P8-T2, and P9-T1 in parallel as the next ready security + load-test batch. These repo-local tasks remain in progress until the admin hardening, remaining security controls, and k6 scenario validation are complete. No AWS apply or deployment is authorized.
 
 P4-T3/P4-T4 dev verification (2026-10-28): user reports the deployment and all requested verification checks passed, including the dev SQS-to-worker-to-document flow and quittance idempotency. P4-T3 and P4-T4 are complete based on user-reported external verification; the assistant did not inspect the AWS account or run a live queue-to-worker test.
 

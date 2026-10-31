@@ -34,12 +34,24 @@ describe('k6 local smoke/load scenario', () => {
     `);
     const { smoke, load, maxVus } = JSON.parse(output);
 
-    expect(smoke.vus).toBe(1);
-    expect(smoke.duration).toBe('30s');
-    expect(load.stages.at(-2).target).toBe(100);
-    expect(load.stages.at(-1).target).toBe(0);
+    const expectedThresholds = {
+      http_req_failed: ['rate<0.01'],
+      http_req_duration: ['p(95)<400', 'p(99)<1000'],
+      checks: ['rate>0.99'],
+    };
+
+    expect(smoke).toEqual({ vus: 1, duration: '30s', thresholds: expectedThresholds });
+    expect(load).toEqual({
+      stages: [
+        { duration: '30s', target: 10 },
+        { duration: '30s', target: 50 },
+        { duration: '1m', target: 100 },
+        { duration: '2m', target: 100 },
+        { duration: '30s', target: 0 },
+      ],
+      thresholds: expectedThresholds,
+    });
     expect(maxVus).toBe(100);
-    expect(load.thresholds.http_req_duration).toEqual(['p(95)<400', 'p(99)<1000']);
   });
 
   it('defaults to loopback and rejects non-local or non-HTTP targets', () => {

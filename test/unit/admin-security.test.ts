@@ -67,6 +67,39 @@ describe('P8 admin security', () => {
     expect((await createRouteApp('super_admin').request('/admin/accounts')).status).toBe(200);
   });
 
+  it('includes trusted Lambda request context in admin audit actor metadata', async () => {
+    const getAccount = vi.fn(async (id: string) => ({ id, name: 'Rental', status: 'active' }));
+    const app = new Hono<AuthEnv>();
+    app.use('*', async (c, next) => {
+      c.set('accountId', 'admin-account');
+      c.set('userId', 'admin-user');
+      c.set('role', 'super_admin');
+      c.set('email', 'admin@example.test');
+      c.set('sessionId', 'admin-session');
+      c.set('impersonating', false);
+      await next();
+    });
+    app.route('/admin', createAdminRoutes({
+      service: {
+        listAccounts: vi.fn(async () => ({ items: [] })),
+        getAccount,
+        impersonate: vi.fn(async () => ({ accessToken: 'signed', tokenType: 'Bearer' as const, expiresIn: 1800, accountId: 'target', readOnly: true })),
+        listAudit: vi.fn(async () => ({ items: [] })),
+        health: vi.fn(async () => ({ table: { name: 'test', status: 'ACTIVE' }, queues: [], lambdaErrors: [], generatedAt: '' })),
+        disableAccount: vi.fn(async (id) => ({ id, name: 'Rental', status: 'disabled' })),
+      },
+    }));
+
+    const response = await app.request('/admin/accounts/target', {
+      headers: { 'user-agent': 'admin-test-agent' },
+    }, { requestContext: { http: { sourceIp: '203.0.113.8' }, requestId: 'gateway-request-1' } } as never);
+
+    expect(response.status).toBe(200);
+    expect(getAccount).toHaveBeenCalledWith('target', expect.objectContaining({
+      ip: '203.0.113.8', requestId: 'gateway-request-1', userAgent: 'admin-test-agent',
+    }));
+  });
+
   it('issues a 30-minute read-only token bound to the admin session only after audit succeeds', async () => {
     const repository = fakeRepository();
     const service = createAdminService({ repository });
