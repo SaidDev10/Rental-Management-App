@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 const profileModuleUrl = pathToFileURL(resolve('load/k6-profile.js')).href;
 const scenarioPath = resolve('load/k6-smoke.js');
 
-function runNode(source) {
+function runNode(source: string) {
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], {
     encoding: 'utf8',
   });

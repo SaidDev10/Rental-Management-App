@@ -78,3 +78,24 @@ variable "stream_aggregator_zip_path" {
   type        = string
   default     = "../../dist/stream-aggregator.zip"
 }
+variable "alarm_email" {
+  description = "Verified email endpoint for production CloudWatch alarm notifications; optional outside production."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.stage != "prod" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", trimspace(var.alarm_email)))
+    error_message = "alarm_email must be a valid notification address when stage is prod."
+  }
+}
+
+variable "lambda_concurrency_alarm_threshold" {
+  description = "Account-wide concurrent Lambda executions that trigger the capacity alarm."
+  type        = number
+  default     = 40
+
+  validation {
+    condition     = var.lambda_concurrency_alarm_threshold > 0
+    error_message = "lambda_concurrency_alarm_threshold must be greater than zero."
+  }
+}

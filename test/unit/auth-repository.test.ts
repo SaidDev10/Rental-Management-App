@@ -1,5 +1,5 @@
 import { DynamoDBDocumentClient, GetCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAuthRepository, createDynamoAuthRepository } from '../../src/modules/auth/repository';
 import { hashPassword } from '../../src/modules/auth/passwords';
@@ -11,6 +11,7 @@ const setDynamoAuthEnv = (): void => {
 };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   delete process.env.TABLE_NAME;
   delete process.env.USE_DYNAMO_AUTH;
 });
@@ -25,6 +26,7 @@ describe('auth service repository flow', () => {
         name: 'Demo Owner',
         role: 'owner',
         locale: 'fr',
+        accountStatus: 'active',
         passwordHash: await hashPassword('supersecret123'),
       }),
       createSession: async () => ({
@@ -52,6 +54,77 @@ describe('auth service repository flow', () => {
     expect(result.accountId).toBe('demo-account');
     expect(result.user.email).toBe('owner@example.com');
     expect(result.accessToken).toContain('.');
+  });
+
+  it('rejects login for a disabled account before creating a session', async () => {
+    const createSession = vi.fn();
+    const repository = {
+      findUserByEmail: async () => ({
+        id: 'user_disabled',
+        accountId: 'disabled-account',
+        email: 'owner@example.com',
+        name: 'Disabled Owner',
+        role: 'owner',
+        locale: 'fr',
+        accountStatus: 'disabled',
+        passwordHash: await hashPassword('supersecret123'),
+      }),
+      createSession,
+    };
+
+    await expect(
+      authService.login(
+        { email: 'owner@example.com', password: 'supersecret123' },
+        repository as never,
+      ),
+    ).rejects.toMatchObject({ status: 403, code: 'ACCOUNT_DISABLED' });
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects MFA completion if the account was disabled after the challenge was issued', async () => {
+    process.env.USE_DYNAMO_AUTH = 'false';
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const findUserByEmail = vi.fn()
+      .mockResolvedValueOnce({
+        id: 'user_mfa',
+        accountId: 'mfa-account',
+        email: 'owner@example.com',
+        name: 'MFA Owner',
+        role: 'owner',
+        locale: 'fr',
+        accountStatus: 'active',
+        mfaEnabled: true,
+        passwordHash: await hashPassword('supersecret123'),
+      })
+      .mockResolvedValueOnce({
+        id: 'user_mfa',
+        accountId: 'mfa-account',
+        email: 'owner@example.com',
+        name: 'MFA Owner',
+        role: 'owner',
+        locale: 'fr',
+        accountStatus: 'disabled',
+        mfaEnabled: true,
+        passwordHash: 'unused',
+      });
+    const createSession = vi.fn();
+    const repository = { findUserByEmail, createSession };
+
+    const challenge = await authService.login(
+      { email: 'owner@example.com', password: 'supersecret123' },
+      repository as never,
+    );
+    if (!('mfaRequired' in challenge)) {
+      throw new Error('Expected an MFA challenge');
+    }
+
+    await expect(
+      authService.verifyMfa(
+        { challengeToken: challenge.challengeToken, code: '100000' },
+        repository as never,
+      ),
+    ).rejects.toMatchObject({ status: 403, code: 'ACCOUNT_DISABLED' });
+    expect(createSession).not.toHaveBeenCalled();
   });
 
   it('reads a user through the system email directory when the table is configured', async () => {
@@ -88,6 +161,10 @@ describe('auth service repository flow', () => {
               },
             };
           }
+
+          if (input.Key?.PK === 'ACCOUNT#account_123' && input.Key?.SK === 'META') {
+            return { Item: { entityType: 'Account', status: 'active' } };
+          }
         }
 
         return {};
@@ -99,6 +176,7 @@ describe('auth service repository flow', () => {
       id: 'user_123',
       email: 'owner@example.com',
       role: 'owner',
+      accountStatus: 'active',
     });
   });
 
@@ -140,6 +218,41 @@ describe('auth service repository flow', () => {
       SK: 'EMAIL#jane@example.com',
       accountId: expect.any(String),
       userId: expect.any(String),
+    });
+  });
+
+  it('creates a DynamoDB session only while its account is active', async () => {
+    setDynamoAuthEnv();
+    const transactions: Array<Record<string, unknown>> = [];
+    const repository = createDynamoAuthRepository({
+      send: async (command: unknown) => {
+        if (command instanceof TransactWriteCommand) {
+          transactions.push(command.input as Record<string, unknown>);
+        }
+
+        return {};
+      },
+    } as unknown as DynamoDBDocumentClient);
+
+    await repository.createSession({
+      userId: 'user_123',
+      accountId: 'account_123',
+      email: 'owner@example.com',
+      role: 'owner',
+      sessionId: 'session_123',
+      familyId: 'family_123',
+      refreshTokenHash: 'refresh_hash_123',
+    });
+
+    const items = transactions[0]?.TransactItems as Array<{
+      ConditionCheck?: {
+        Key?: Record<string, unknown>;
+        ConditionExpression?: string;
+      };
+    }>;
+    expect(items[0]?.ConditionCheck).toMatchObject({
+      Key: { PK: 'ACCOUNT#account_123', SK: 'META' },
+      ConditionExpression: '#status = :active AND #entityType = :account',
     });
   });
 

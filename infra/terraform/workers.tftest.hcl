@@ -5,6 +5,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:eu-north-1:123456789012:mock-alarms"
+    }
+  }
+
   mock_resource "aws_sqs_queue" {
     defaults = {
       arn = "arn:aws:sqs:eu-north-1:123456789012:mock-queue"
@@ -34,7 +40,7 @@ run "worker_queue_and_mapping_configuration" {
     condition = alltrue([
       for key in keys(local.worker_queue_settings) :
       aws_lambda_event_source_mapping.worker[key].event_source_arn == aws_sqs_queue.worker[key].arn &&
-      aws_lambda_event_source_mapping.worker[key].function_name == aws_lambda_function.worker[key].arn &&
+      aws_lambda_event_source_mapping.worker[key].function_name == aws_lambda_alias.worker_live[key].arn &&
       contains(aws_lambda_event_source_mapping.worker[key].function_response_types, "ReportBatchItemFailures")
     ])
     error_message = "Each worker event-source mapping must consume its matching queue."
@@ -73,7 +79,7 @@ run "stream_aggregator_configuration" {
       aws_dynamodb_table.main.stream_enabled &&
       aws_dynamodb_table.main.stream_view_type == "NEW_AND_OLD_IMAGES" &&
       aws_lambda_event_source_mapping.stream_aggregator.event_source_arn == aws_dynamodb_table.main.stream_arn &&
-      aws_lambda_event_source_mapping.stream_aggregator.function_name == aws_lambda_function.stream_aggregator.arn
+      aws_lambda_event_source_mapping.stream_aggregator.function_name == aws_lambda_alias.stream_aggregator_live.arn
     )
     error_message = "The active-stage table must expose NEW_AND_OLD_IMAGES and feed the stream aggregator."
   }
@@ -108,4 +114,58 @@ run "stream_aggregator_configuration" {
     )
     error_message = "The aggregator role must be scoped to its table stream, aggregation table, and stream DLQ."
   }
+}
+
+run "production_alarms_and_rollback_aliases" {
+  command = apply
+
+  variables {
+    stage       = "prod"
+    alarm_email = "on-call@example.com"
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_metric_alarm.dlq_depth) == 4 &&
+      aws_cloudwatch_metric_alarm.dlq_depth["pdf"].metric_name == "ApproximateNumberOfMessagesVisible" &&
+      aws_cloudwatch_metric_alarm.dlq_depth["pdf"].threshold == 1 &&
+      contains(aws_cloudwatch_metric_alarm.dlq_depth["pdf"].alarm_actions, aws_sns_topic.alarms.arn) &&
+      contains(aws_cloudwatch_metric_alarm.dlq_depth["stream"].alarm_actions, aws_sns_topic.alarms.arn)
+    )
+    error_message = "Each production dead-letter queue must alarm immediately and notify the configured SNS topic."
+  }
+
+  assert {
+    condition = (
+      length(aws_lambda_alias.worker_live) == length(local.worker_specs) &&
+      aws_lambda_alias.stream_aggregator_live.name == "live" &&
+      alltrue([
+        for key in keys(local.worker_specs) :
+        aws_lambda_event_source_mapping.worker[key].function_name == aws_lambda_alias.worker_live[key].arn
+      ]) &&
+      aws_lambda_event_source_mapping.stream_aggregator.function_name == aws_lambda_alias.stream_aggregator_live.arn
+    )
+    error_message = "Worker and stream event sources must target rollback-capable Lambda live aliases."
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudwatch_metric_alarm.lambda_errors) == 4 &&
+      aws_cloudwatch_metric_alarm.dynamodb_throttles.threshold == 1 &&
+      aws_cloudwatch_metric_alarm.lambda_concurrency.threshold == var.lambda_concurrency_alarm_threshold &&
+      aws_sns_topic_subscription.alarm_email[0].endpoint == var.alarm_email
+    )
+    error_message = "Production error, throttle, concurrency, and email-notification alarms must be configured."
+  }
+}
+
+run "production_requires_alarm_contact" {
+  command = plan
+
+  variables {
+    stage       = "prod"
+    alarm_email = ""
+  }
+
+  expect_failures = [var.alarm_email]
 }

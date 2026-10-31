@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { GetCommand, PutCommand, ScanCommand, TransactWriteCommand, UpdateCommand, type DynamoDBDocumentClient, type ScanCommandInput } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, ScanCommand, TransactWriteCommand, UpdateCommand, type DynamoDBDocumentClient, type ScanCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ulid } from 'ulid';
 
 import { getDocumentClient } from '../../shared/db';
@@ -10,6 +10,7 @@ import type { AccountRecord, AuthUser } from './types';
 
 export type AuthUserRecord = AuthUser & {
   passwordHash: string;
+  accountStatus?: string | undefined;
   failedLoginAttempts?: number;
   lockedUntil?: string | null;
 };
@@ -71,6 +72,7 @@ const usersByEmail = new Map<string, AuthUserRecord>();
 const usersById = new Map<string, AuthUserRecord>();
 const emailDirectory = new Map<string, { accountId: string; userId: string }>();
 const accountsById = new Map<string, AccountRecord>();
+const accountStatuses = new Map<string, string>();
 const sessionsByUserId = new Map<string, SessionRecord>();
 const sessionsByRefreshHash = new Map<string, SessionRecord>();
 const usedRefreshTokensByUser = new Map<string, Set<string>>();
@@ -124,7 +126,7 @@ const isDuplicateEmailFailure = (error: unknown): boolean => {
   return maybeError.message === 'Email already taken';
 };
 
-const toAuthUserRecord = (item: Record<string, unknown>): AuthUserRecord => {
+const toAuthUserRecord = (item: Record<string, unknown>, accountStatus?: string): AuthUserRecord => {
   const accountId = String(item.accountId ?? '');
   const userId = String(item.userId ?? item.id ?? '');
   const email = String(item.email ?? '');
@@ -137,6 +139,7 @@ const toAuthUserRecord = (item: Record<string, unknown>): AuthUserRecord => {
     role: item.role === 'super_admin' ? 'super_admin' : 'owner',
     locale: item.locale === 'en' ? 'en' : 'fr',
     passwordHash: String(item.passwordHash ?? ''),
+    accountStatus,
     failedLoginAttempts: Number(item.failedLoginAttempts ?? 0),
     lockedUntil: item.lockedUntil === null || item.lockedUntil === undefined ? null : String(item.lockedUntil),
   };
@@ -181,6 +184,7 @@ const bootstrapDemoUser = async (): Promise<void> => {
 
   emailDirectory.set(email, { accountId, userId });
   usersById.set(userId, userRecord);
+  accountStatuses.set(accountId, 'active');
   accountsById.set(accountId, {
     id: accountId,
     name: 'Demo Rentals',
@@ -193,7 +197,9 @@ const getLocalAuthRepository = (): AuthRepository => ({
   async findUserByEmail(email: string): Promise<AuthUserRecord | undefined> {
     await bootstrapDemoUser();
 
-    return usersByEmail.get(normalizeEmail(email));
+    const user = usersByEmail.get(normalizeEmail(email));
+
+    return user ? { ...user, accountStatus: accountStatuses.get(user.accountId) } : undefined;
   },
 
   async createAccountAndUser({ accountName, ownerName, email, passwordHash, locale }) {
@@ -227,6 +233,7 @@ const getLocalAuthRepository = (): AuthRepository => ({
     emailDirectory.set(normalizedEmail, { accountId, userId });
     usersByEmail.set(normalizedEmail, userRecord);
     usersById.set(userId, userRecord);
+    accountStatuses.set(accountId, 'active');
     accountsById.set(accountId, account);
 
     return { user, account };
@@ -422,7 +429,16 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
       return undefined;
     }
 
-    return toAuthUserRecord(userItem);
+    const accountResult = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { PK: pk.account(accountId), SK: sk.meta() },
+        ConsistentRead: true,
+      }),
+    );
+    const accountItem = accountResult.Item as Record<string, unknown> | undefined;
+
+    return toAuthUserRecord(userItem, typeof accountItem?.status === 'string' ? accountItem.status : undefined);
   },
 
   async createAccountAndUser({ accountName, ownerName, email, passwordHash, locale }) {
@@ -567,9 +583,24 @@ export const createDynamoAuthRepository = (client: DynamoDBDocumentClient): Auth
     };
 
     await client.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: item,
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            ConditionCheck: {
+              TableName: tableName,
+              Key: { PK: pk.account(input.accountId), SK: sk.meta() },
+              ConditionExpression: '#status = :active AND #entityType = :account',
+              ExpressionAttributeNames: { '#status': 'status', '#entityType': 'entityType' },
+              ExpressionAttributeValues: { ':active': 'active', ':account': 'Account' },
+            },
+          },
+          {
+            Put: {
+              TableName: tableName,
+              Item: item,
+            },
+          },
+        ],
       }),
     );
 

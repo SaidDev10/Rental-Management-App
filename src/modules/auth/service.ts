@@ -17,6 +17,12 @@ import type {
 
 const getDefaultAuthRepository = (): AuthRepository => createAuthRepository();
 
+const assertAccountActive = (accountStatus: string | undefined): void => {
+  if (accountStatus !== 'active') {
+    throw new AppError('Account is disabled', 403, 'ACCOUNT_DISABLED');
+  }
+};
+
 type MfaChallenge = {
   userId: string;
   accountId: string;
@@ -90,6 +96,8 @@ export const authService = {
 
       throw new UnauthenticatedError('Invalid credentials');
     }
+
+    assertAccountActive(userRecord.accountStatus);
 
     userRecord.failedLoginAttempts = 0;
     userRecord.lockedUntil = null;
@@ -226,6 +234,8 @@ export const authService = {
     if (!userRecord) {
       throw new UnauthenticatedError('Invalid credentials');
     }
+
+    assertAccountActive(userRecord.accountStatus);
 
     const refreshToken = generateRefreshToken();
     const sessionId = `session_${randomUUID()}`;

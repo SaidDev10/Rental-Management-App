@@ -235,7 +235,7 @@ resource "aws_s3_object" "worker_artifact" {
   for_each = local.worker_specs
 
   bucket                 = var.lambda_artifacts_bucket_name
-  key                    = "${var.stage}/workers/${each.value.name}.zip"
+  key                    = "${var.stage}/workers/${each.value.name}-${substr(filebase64sha256(each.value.artifact), 0, 16)}.zip"
   source                 = each.value.artifact
   source_hash            = filebase64sha256(each.value.artifact)
   content_type           = "application/zip"
@@ -249,6 +249,7 @@ resource "aws_lambda_function" "worker" {
   s3_bucket                      = var.lambda_artifacts_bucket_name
   s3_key                         = aws_s3_object.worker_artifact[each.key].key
   source_code_hash               = filebase64sha256(each.value.artifact)
+  publish                        = true
   runtime                        = each.value.runtime
   handler                        = each.value.handler
   timeout                        = each.value.timeout
@@ -289,11 +290,19 @@ resource "aws_lambda_function" "worker" {
   }
 }
 
+resource "aws_lambda_alias" "worker_live" {
+  for_each = local.worker_specs
+
+  name             = "live"
+  function_name    = aws_lambda_function.worker[each.key].function_name
+  function_version = aws_lambda_function.worker[each.key].version
+}
+
 resource "aws_lambda_event_source_mapping" "worker" {
   for_each = local.worker_specs
 
   event_source_arn                   = aws_sqs_queue.worker[each.value.queue].arn
-  function_name                      = aws_lambda_function.worker[each.key].arn
+  function_name                      = aws_lambda_alias.worker_live[each.key].arn
   batch_size                         = 10
   maximum_batching_window_in_seconds = 5
   function_response_types            = ["ReportBatchItemFailures"]
@@ -376,7 +385,7 @@ resource "aws_iam_role_policy" "stream_aggregator" {
 
 resource "aws_s3_object" "stream_aggregator_artifact" {
   bucket                 = var.lambda_artifacts_bucket_name
-  key                    = "${var.stage}/workers/stream-aggregator.zip"
+  key                    = "${var.stage}/workers/stream-aggregator-${substr(filebase64sha256(var.stream_aggregator_zip_path), 0, 16)}.zip"
   source                 = var.stream_aggregator_zip_path
   source_hash            = filebase64sha256(var.stream_aggregator_zip_path)
   content_type           = "application/zip"
@@ -389,6 +398,7 @@ resource "aws_lambda_function" "stream_aggregator" {
   s3_bucket                      = var.lambda_artifacts_bucket_name
   s3_key                         = aws_s3_object.stream_aggregator_artifact.key
   source_code_hash               = filebase64sha256(var.stream_aggregator_zip_path)
+  publish                        = true
   runtime                        = "nodejs22.x"
   handler                        = "stream-aggregator.handler"
   timeout                        = 30
@@ -411,9 +421,15 @@ resource "aws_lambda_function" "stream_aggregator" {
   }
 }
 
+resource "aws_lambda_alias" "stream_aggregator_live" {
+  name             = "live"
+  function_name    = aws_lambda_function.stream_aggregator.function_name
+  function_version = aws_lambda_function.stream_aggregator.version
+}
+
 resource "aws_lambda_event_source_mapping" "stream_aggregator" {
   event_source_arn               = aws_dynamodb_table.main.stream_arn
-  function_name                  = aws_lambda_function.stream_aggregator.arn
+  function_name                  = aws_lambda_alias.stream_aggregator_live.arn
   starting_position              = "LATEST"
   batch_size                     = 100
   bisect_batch_on_function_error = true

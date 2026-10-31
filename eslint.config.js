@@ -6,6 +6,14 @@ export default [
   {
     ignores: ['.dependency-cruiser.cjs', 'dist/**', 'node_modules/**', 'coverage/**'],
   },
+  {
+    files: ['load/**/*.js'],
+    languageOptions: {
+      globals: {
+        __ENV: 'readonly',
+      },
+    },
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

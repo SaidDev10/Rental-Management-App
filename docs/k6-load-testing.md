@@ -26,6 +26,8 @@ controlled test plan and is not enabled by this script.
    To use another local loopback port, pass `--env BASE_URL=http://127.0.0.1:PORT`.
    The script defaults to `http://127.0.0.1:3000` and `PROFILE=smoke`.
 
+For production deployment, alarm response, smoke checks, rollback, and team handoff, see the [production cutover runbook](production-cutover-runbook.md). This k6 script cannot target production.
+
 Both profiles check the health response, fail on more than 1% failed requests,
 require at least 99% successful checks, and apply the phase latency thresholds
 (p95 < 400 ms and p99 < 1,000 ms). These thresholds are scenario gates, not evidence

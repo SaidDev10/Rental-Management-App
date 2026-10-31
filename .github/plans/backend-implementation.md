@@ -200,8 +200,15 @@ P8-T2 progress (2026-10-31): implemented the login per-IP limit (10/minute), the
 - [x] Add the loopback-only k6 smoke/load scenario, including the 100-VU profile and local validation tests.
 - [ ] Run the k6 scenario at target concurrency and record measured results.
 - [ ] Provision and verify production Terraform, alarms, and deployment/rollback procedures.
-- [ ] Write and exercise the operational runbook.
+- [x] Write the operational deployment, smoke-check, alarm-response, rollback, and team-handoff runbook.
+- [ ] Exercise the operational runbook after production deployment, alarms, and approval are available.
 - [ ] Meet the phase exit criteria: p95 is at most 400 ms and p99 is at most 1,000 ms at 100 concurrent users.
+
+P9-T2 progress (2026-10-31): local Terraform validation passes for the production alarm and alias setup: `terraform fmt -recursive`, `terraform init -backend=false`, `terraform validate`, and `terraform test` all passed (4/4). The module includes DLQ, worker/stream error, DynamoDB throttling, and Lambda concurrency alarms plus versioned artifact aliases and rollback guidance. No AWS plan, apply, mutation, or deployment was performed; production alarm routing, API deployment coverage, and AWS verification remain outstanding.
+
+P9-T3 progress (2026-10-31): added `docs/production-cutover-runbook.md` and linked it from `docs/k6-load-testing.md`. The runbook documents deployment gates, read-only smoke checks, alarm response, rollback, and on-call handoff while explicitly recording that current Terraform does not provision the API deployment, CloudWatch alarms, or alert route. The operational exercise and production cutover remain blocked on P9-T2 readiness and explicit approval; no AWS mutation or deployment was performed.
+
+P9-T3 verification (2026-10-31): `pnpm exec vitest run test/unit/k6-smoke.test.ts --reporter=dot` passed (1 file, 3 tests); the runbook structure/readiness/reference check and `git diff --check` passed. No AWS request, mutation, apply, deployment, or production exercise was run.
 
 ## Current verification snapshot
 
@@ -228,6 +235,8 @@ P6-T4 is complete: real Chromium PDF rendering and PDF.js extraction verified th
 Batch status (2026-10-31, batch 3): delegated P5-T3, P6-T1, and P7-T1 in parallel. P5-T3 follows completed stream and dashboard foundations; P6-T1 covers secure document presign/upload/download APIs; P7-T1 covers representative report fixtures and integration coverage for filters, date ranges, and empty results. No AWS apply, mutation, or deployment is authorized.
 
 Batch status (2026-10-31, batch 4): delegated P8-T1, P8-T2, and P9-T1 in parallel. These are the next ready cards after P5/P6/P7 milestone work and remain repository-local until the security and load-test deliverables are implemented and validated. No AWS apply or deployment is authorized.
+
+Batch status (2026-10-31, batch 5): delegated P9-T2 and P9-T3 in parallel. The tasks are in progress and remain repository-local until the production Terraform verification and operational runbook are fully validated; no AWS apply or deployment is authorized.
 
 P4-T3/P4-T4 dev verification (2026-10-28): user reports the deployment and all requested verification checks passed, including the dev SQS-to-worker-to-document flow and quittance idempotency. P4-T3 and P4-T4 are complete based on user-reported external verification; the assistant did not inspect the AWS account or run a live queue-to-worker test.
 

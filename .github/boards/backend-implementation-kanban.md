@@ -19,8 +19,8 @@ Latest repository validation (2026-10-31) passed for Terraform stream configurat
 |  | **P8-T1 · P8** Implement `/admin/*`, authorization, impersonation, and audit logging. |  |  |
 |  | **P8-T2 · P8** Implement specified rate limits, security headers, and remaining security controls. |  |  |
 |  | **P9-T1 · P9** Create the k6 smoke/load scenario. |  |  |
-| **P9-T2 · P9** Provision and verify production Terraform, alarms, and deployment/rollback procedures. |  |  |  |
-| **P9-T3 · P9** Write the operational runbook. |  |  |  |
+|  | **P9-T2 · P9** Provision and verify production Terraform, alarms, and deployment/rollback procedures. **Local Terraform validation passed; AWS production verification remains blocked pending approval.** |  |  |
+|  | **P9-T3 · P9** Write and reconcile the operational runbook. **Runbook written and validated locally; production exercise remains blocked pending approval and the missing API/alarm path.** |  |  |
 
 ## Completed this batch
 
